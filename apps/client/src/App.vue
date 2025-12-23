@@ -300,9 +300,6 @@ const handleThemeManagerClick = () => {
   showThemeManager.value = true;
 };
 
-// Russian voice IDs for language detection
-const russianVoiceIds = ['XB0fDUnXU5powFXDhCwa', 'onwK4e9ZLuTAKqWW03F9', 'N2lVS1w4EtoT3dr4eOWO', 'pFZP5JQG7iQjIQuC4Bku', 'bIHbv24MWmeRgasZH58o'];
-
 // Test voice notification using local audio
 const testVoiceNotification = () => {
   const localAudio = getLocalAudio();

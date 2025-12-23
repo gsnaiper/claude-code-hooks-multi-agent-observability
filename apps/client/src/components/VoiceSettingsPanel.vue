@@ -131,6 +131,20 @@
                   class="w-5 h-5 rounded accent-[var(--theme-primary)]"
                 />
               </label>
+
+              <!-- Git Commits -->
+              <label class="flex items-center justify-between cursor-pointer">
+                <div class="flex items-center gap-2">
+                  <span>📝</span>
+                  <span class="text-[var(--theme-text-primary)]">Git Commits</span>
+                </div>
+                <input
+                  type="checkbox"
+                  :checked="settings.notifyOnCommit"
+                  @change="updateSetting('notifyOnCommit', ($event.target as HTMLInputElement).checked)"
+                  class="w-5 h-5 rounded accent-[var(--theme-primary)]"
+                />
+              </label>
             </div>
           </div>
 
@@ -273,7 +287,7 @@
 <script setup lang="ts">
 import type { VoiceSettings, NotificationRecord } from '../composables/useVoiceNotifications';
 
-const props = defineProps<{
+defineProps<{
   isOpen: boolean;
   settings: VoiceSettings;
   isSpeaking: boolean;
@@ -313,7 +327,8 @@ const getTypeIcon = (type: string): string => {
     error: '❌',
     hitl: '🙋',
     notification: '🔔',
-    summary: '📢'
+    summary: '📢',
+    commit: '📝'
   };
   return icons[type] || '❓';
 };

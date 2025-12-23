@@ -22,14 +22,16 @@ const LOCAL_AUDIO = {
     error: '/audio/error-en.mp3',
     hitlRequest: '/audio/hitl-request-en.mp3',
     commandFailed: '/audio/command-failed-en.mp3',
-    notification: '/audio/notification-en.mp3'
+    notification: '/audio/notification-en.mp3',
+    commit: '/audio/commit-en.mp3'
   },
   ru: {
     taskComplete: '/audio/task-complete-ru.mp3',
     error: '/audio/error-ru.mp3',
     hitlRequest: '/audio/hitl-request-ru.mp3',
     commandFailed: '/audio/command-failed-ru.mp3',
-    notification: '/audio/notification-ru.mp3'
+    notification: '/audio/notification-ru.mp3',
+    commit: '/audio/commit-ru.mp3'
   }
 };
 
@@ -43,13 +45,14 @@ export interface VoiceSettings {
   notifyOnHITL: boolean;
   notifyOnSummary: boolean;
   notifyOnNotification: boolean;
+  notifyOnCommit: boolean;
 }
 
 // Notification history record
 export interface NotificationRecord {
   id: number;
   timestamp: number;
-  type: 'stop' | 'error' | 'hitl' | 'notification' | 'summary';
+  type: 'stop' | 'error' | 'hitl' | 'notification' | 'summary' | 'commit';
   sourceApp: string;
   sessionId: string;
   message: string;
@@ -64,7 +67,8 @@ const defaultSettings: VoiceSettings = {
   notifyOnError: true,
   notifyOnHITL: true,
   notifyOnSummary: false,
-  notifyOnNotification: true
+  notifyOnNotification: true,
+  notifyOnCommit: true
 };
 
 const MAX_HISTORY = 20;
@@ -124,6 +128,19 @@ function createVoiceNotifications() {
   // Get current language based on voice selection
   const isRussianVoice = () => RUSSIAN_VOICE_IDS.includes(settings.value.voiceId);
   const getLocalAudio = () => isRussianVoice() ? LOCAL_AUDIO.ru : LOCAL_AUDIO.en;
+
+  // Extract commit message from git commit command
+  const extractCommitMessage = (command: string): string | null => {
+    // Pattern 1: git commit -m "message" or git commit -m 'message'
+    const match1 = command.match(/git commit[^"']*-m\s*["']([^"']+)["']/);
+    if (match1) return match1[1];
+
+    // Pattern 2: HEREDOC style - git commit -m "$(cat <<'EOF'\nmessage\nEOF\n)"
+    const match2 = command.match(/git commit.*\$\(cat\s*<<['"]?EOF['"]?\s*\n([\s\S]*?)\n\s*EOF/);
+    if (match2) return match2[1].split('\n')[0].trim(); // First line only
+
+    return null;
+  };
 
   // Play audio blob
   const playBlob = async (blob: Blob): Promise<void> => {
@@ -282,6 +299,44 @@ function createVoiceNotifications() {
           : `${sourceApp}: Human input required`
       });
       return;
+    }
+
+    // Git commit notification
+    if (settings.value.notifyOnCommit && eventType === 'PostToolUse') {
+      const toolName = event.payload?.tool_name;
+      const command = event.payload?.tool_input?.command || '';
+
+      if (toolName === 'Bash' && command.includes('git commit')) {
+        const commitMsg = extractCommitMessage(command);
+        isSpeaking.value = true;
+
+        // 1. Play local "commit" sound
+        await playLocalAudio(localAudio.commit);
+
+        // 2. Speak brief commit info (if message extracted)
+        if (commitMsg && ELEVENLABS_API_KEY) {
+          const brief = commitMsg.slice(0, 60); // First 60 chars max
+          const text = isRussianVoice() ? `Commit: ${brief}` : `Commit: ${brief}`;
+          try {
+            const blob = await audioCache.generateWithoutCache(text, settings.value.voiceId);
+            await playBlob(blob);
+          } catch (error) {
+            console.error('Commit audio error:', error);
+          }
+        }
+
+        // Add to history
+        addToHistory({
+          timestamp: Date.now(),
+          type: 'commit',
+          sourceApp,
+          sessionId,
+          message: commitMsg || 'git commit'
+        });
+
+        isSpeaking.value = false;
+        return;
+      }
     }
 
     // Stop event - task complete with project context
