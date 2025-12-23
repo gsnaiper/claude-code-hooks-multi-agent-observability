@@ -23,6 +23,15 @@ export interface ElevenLabsSubscription {
   status: string;
 }
 
+// API Key info for multi-key support
+export interface ApiKeyInfo {
+  key: string;           // Full API key
+  label: string;         // Label (e.g. "Default", "Personal", "Work")
+  subscription: ElevenLabsSubscription | null;
+  lastChecked: number;   // Unix timestamp of last balance check
+  isActive: boolean;     // Is this key enabled for use
+}
+
 // Simple hash function for cache keys
 const hashText = (text: string): string => {
   let hash = 0;
@@ -171,9 +180,25 @@ function createAudioCache() {
   // Track last generation cost
   const lastCharacterCost = ref<number>(0);
 
+  // Select best API key (lowest usage %) for load balancing
+  const selectBestKey = (apiKeys: ApiKeyInfo[]): ApiKeyInfo | null => {
+    const activeKeys = apiKeys.filter(k => k.isActive && k.subscription);
+    if (activeKeys.length === 0) return null;
+
+    // Sort by usage % (ascending)
+    activeKeys.sort((a, b) => {
+      const usageA = a.subscription!.characterCount / a.subscription!.characterLimit;
+      const usageB = b.subscription!.characterCount / b.subscription!.characterLimit;
+      return usageA - usageB;
+    });
+
+    return activeKeys[0];
+  };
+
   // Generate audio via ElevenLabs API
-  const generateViaAPI = async (text: string, voiceId: string): Promise<AudioGenerationResult> => {
-    if (!ELEVENLABS_API_KEY) {
+  const generateViaAPI = async (text: string, voiceId: string, apiKeyOverride?: string): Promise<AudioGenerationResult> => {
+    const apiKey = apiKeyOverride || ELEVENLABS_API_KEY;
+    if (!apiKey) {
       throw new Error('ElevenLabs API key not configured');
     }
 
@@ -184,7 +209,7 @@ function createAudioCache() {
         headers: {
           'Accept': 'audio/mpeg',
           'Content-Type': 'application/json',
-          'xi-api-key': ELEVENLABS_API_KEY
+          'xi-api-key': apiKey
         },
         body: JSON.stringify({
           text: text.slice(0, 500),
@@ -215,16 +240,16 @@ function createAudioCache() {
     return { blob, characterCost };
   };
 
-  // Fetch ElevenLabs subscription info
-  const fetchSubscription = async (): Promise<ElevenLabsSubscription | null> => {
-    if (!ELEVENLABS_API_KEY) {
+  // Fetch ElevenLabs subscription info for a specific key
+  const fetchSubscriptionForKey = async (apiKey: string): Promise<ElevenLabsSubscription | null> => {
+    if (!apiKey) {
       return null;
     }
 
     try {
       const response = await fetch('https://api.elevenlabs.io/v1/user/subscription', {
         headers: {
-          'xi-api-key': ELEVENLABS_API_KEY
+          'xi-api-key': apiKey
         }
       });
 
@@ -244,6 +269,26 @@ function createAudioCache() {
       console.error('[AudioCache] Failed to fetch subscription:', error);
       return null;
     }
+  };
+
+  // Fetch ElevenLabs subscription info (uses default env key)
+  const fetchSubscription = async (): Promise<ElevenLabsSubscription | null> => {
+    return fetchSubscriptionForKey(ELEVENLABS_API_KEY);
+  };
+
+  // Refresh subscription info for all keys
+  const refreshAllKeys = async (apiKeys: ApiKeyInfo[]): Promise<ApiKeyInfo[]> => {
+    const updated = await Promise.all(
+      apiKeys.map(async (keyInfo) => {
+        const subscription = await fetchSubscriptionForKey(keyInfo.key);
+        return {
+          ...keyInfo,
+          subscription,
+          lastChecked: Date.now()
+        };
+      })
+    );
+    return updated;
   };
 
   // Get from cache or generate via API (with caching)
@@ -285,9 +330,9 @@ function createAudioCache() {
 
   // Generate without local caching (for dynamic content) - uploads to backend for persistence
   // Returns blob and characterCost
-  const generateWithoutCache = async (text: string, voiceId: string, sourceApp?: string): Promise<AudioGenerationResult> => {
+  const generateWithoutCache = async (text: string, voiceId: string, sourceApp?: string, apiKeyOverride?: string): Promise<AudioGenerationResult> => {
     console.log(`[AudioCache] Generating dynamic: ${text.slice(0, 30)}...`);
-    const result = await generateViaAPI(text, voiceId);
+    const result = await generateViaAPI(text, voiceId, apiKeyOverride);
 
     // Upload to backend in background (non-blocking)
     uploadToBackend(result.blob, text, voiceId, sourceApp).catch(() => {
@@ -330,6 +375,10 @@ function createAudioCache() {
     clearCache,
     getCacheStats,
     fetchSubscription,
+    fetchSubscriptionForKey,
+    refreshAllKeys,
+    selectBestKey,
+    generateViaAPI,
     cache,
     isLoading,
     lastCharacterCost

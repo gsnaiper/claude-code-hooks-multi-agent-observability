@@ -108,11 +108,23 @@ const server = Bun.serve({
   async fetch(req: Request) {
     const url = new URL(req.url);
     
-    // Handle CORS
+    // Allowed origins for CORS
+    const ALLOWED_ORIGINS = [
+      'http://localhost:5173',
+      'http://192.168.15.7:5173',
+      'https://cli.di4.dev',
+      'http://cli.di4.dev'
+    ];
+
+    // Handle CORS with dynamic origin
+    const origin = req.headers.get('origin') || '';
+    const allowOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+
     const headers = {
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': allowOrigin,
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Credentials': 'true',
     };
     
     // Handle preflight

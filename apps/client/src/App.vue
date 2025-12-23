@@ -144,6 +144,8 @@
       :notification-history="notificationHistory"
       :cache-stats="cacheStats"
       :subscription="voiceSubscription"
+      :api-keys="voiceApiKeys"
+      :is-refreshing-keys="isRefreshingVoiceKeys"
       @close="showVoiceSettings = false"
       @toggle-enabled="toggleVoice"
       @update:settings="updateVoiceSettings"
@@ -151,6 +153,10 @@
       @replay="replayNotification"
       @clear-history="clearVoiceHistory"
       @clear-cache="audioCache.clearCache"
+      @add-api-key="handleAddApiKey"
+      @remove-api-key="handleRemoveApiKey"
+      @toggle-api-key="handleToggleApiKey"
+      @refresh-api-keys="handleRefreshApiKeys"
     />
 
     <!-- Toast Notifications -->
@@ -206,12 +212,36 @@ const {
   replayNotification,
   clearHistory: clearVoiceHistory,
   audioCache,
-  subscription: voiceSubscription
+  subscription: voiceSubscription,
+  // Multi-key support
+  apiKeys: voiceApiKeys,
+  isRefreshingKeys: isRefreshingVoiceKeys,
+  addApiKey,
+  removeApiKey,
+  toggleApiKey,
+  refreshAllApiKeys
 } = useVoiceNotifications();
 
 // Cache stats for UI
 const cacheStats = computed(() => audioCache.getCacheStats());
 const showVoiceSettings = ref(false);
+
+// API key management handlers
+const handleAddApiKey = async (key: string, label: string) => {
+  await addApiKey(key, label);
+};
+
+const handleRemoveApiKey = (key: string) => {
+  removeApiKey(key);
+};
+
+const handleToggleApiKey = (key: string) => {
+  toggleApiKey(key);
+};
+
+const handleRefreshApiKeys = () => {
+  refreshAllApiKeys();
+};
 
 // Track last event count for new event detection
 let lastEventCount = 0;

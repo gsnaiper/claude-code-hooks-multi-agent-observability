@@ -1,6 +1,6 @@
 import { ref, computed } from 'vue';
 import type { HookEvent } from '../types';
-import { useAudioCache } from './useAudioCache';
+import { useAudioCache, type ApiKeyInfo, type ElevenLabsSubscription } from './useAudioCache';
 import { playNormalized, playNormalizedUrl, stopPlayback } from './useAudioNormalizer';
 
 // ElevenLabs configuration
@@ -104,32 +104,145 @@ function createVoiceNotifications() {
     return defaultSettings;
   };
 
+  // Load API keys from localStorage
+  const loadApiKeys = (): ApiKeyInfo[] => {
+    try {
+      const saved = localStorage.getItem('elevenlabsApiKeys');
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {
+      console.warn('Failed to load API keys:', e);
+    }
+    return [];
+  };
+
+  // Save API keys to localStorage
+  const saveApiKeys = () => {
+    try {
+      localStorage.setItem('elevenlabsApiKeys', JSON.stringify(apiKeys.value));
+    } catch (e) {
+      console.warn('Failed to save API keys:', e);
+    }
+  };
+
   const settings = ref<VoiceSettings>(loadSettings());
   const isSpeaking = ref(false);
   const notificationHistory = ref<NotificationRecord[]>([]);
 
-  // Subscription state
-  const subscription = ref<{
-    characterCount: number;
-    characterLimit: number;
-    nextResetUnix: number | null;
-    tier: string;
-    status: string;
-  } | null>(null);
+  // Multi-key support
+  const apiKeys = ref<ApiKeyInfo[]>(loadApiKeys());
+  const isRefreshingKeys = ref(false);
+
+  // Auto-add env key as "Default" if no keys exist
+  if (apiKeys.value.length === 0 && ELEVENLABS_API_KEY) {
+    apiKeys.value.push({
+      key: ELEVENLABS_API_KEY,
+      label: 'Default',
+      subscription: null,
+      lastChecked: 0,
+      isActive: true
+    });
+    saveApiKeys();
+  }
+
+  // Subscription state (computed from best active key)
+  const subscription = computed<ElevenLabsSubscription | null>(() => {
+    const activeKeys = apiKeys.value.filter(k => k.isActive && k.subscription);
+    if (activeKeys.length === 0) return null;
+    // Return the first active key's subscription for display
+    return activeKeys[0].subscription;
+  });
   const isLoadingSubscription = ref(false);
 
-  const isConfigured = computed(() => !!ELEVENLABS_API_KEY);
+  // Check if any API key is configured
+  const isConfigured = computed(() => apiKeys.value.length > 0 || !!ELEVENLABS_API_KEY);
 
-  // Fetch subscription info
+  // Add new API key
+  const addApiKey = async (key: string, label?: string) => {
+    // Check if key already exists
+    if (apiKeys.value.some(k => k.key === key)) {
+      console.warn('API key already exists');
+      return false;
+    }
+
+    // Fetch subscription to validate key
+    const sub = await audioCache.fetchSubscriptionForKey(key);
+    if (!sub) {
+      console.error('Invalid API key or failed to fetch subscription');
+      return false;
+    }
+
+    const newKey: ApiKeyInfo = {
+      key,
+      label: label || `Key ${apiKeys.value.length + 1}`,
+      subscription: sub,
+      lastChecked: Date.now(),
+      isActive: true
+    };
+
+    apiKeys.value.push(newKey);
+    saveApiKeys();
+    return true;
+  };
+
+  // Remove API key
+  const removeApiKey = (key: string) => {
+    const index = apiKeys.value.findIndex(k => k.key === key);
+    if (index !== -1) {
+      apiKeys.value.splice(index, 1);
+      saveApiKeys();
+    }
+  };
+
+  // Toggle API key active state
+  const toggleApiKey = (key: string) => {
+    const keyInfo = apiKeys.value.find(k => k.key === key);
+    if (keyInfo) {
+      keyInfo.isActive = !keyInfo.isActive;
+      saveApiKeys();
+    }
+  };
+
+  // Update API key label
+  const updateApiKeyLabel = (key: string, label: string) => {
+    const keyInfo = apiKeys.value.find(k => k.key === key);
+    if (keyInfo) {
+      keyInfo.label = label;
+      saveApiKeys();
+    }
+  };
+
+  // Refresh all API keys subscription info
+  const refreshAllApiKeys = async () => {
+    if (isRefreshingKeys.value) return;
+    isRefreshingKeys.value = true;
+
+    try {
+      const updated = await audioCache.refreshAllKeys(apiKeys.value);
+      apiKeys.value = updated;
+      saveApiKeys();
+    } catch (error) {
+      console.error('Failed to refresh API keys:', error);
+    } finally {
+      isRefreshingKeys.value = false;
+    }
+  };
+
+  // Get best API key for next request (load balancing)
+  const getBestApiKey = (): string | null => {
+    const bestKey = audioCache.selectBestKey(apiKeys.value);
+    return bestKey?.key || (apiKeys.value.length > 0 ? apiKeys.value[0].key : ELEVENLABS_API_KEY) || null;
+  };
+
+  // Fetch subscription info (legacy - refreshes first key)
   const refreshSubscription = async () => {
-    if (!ELEVENLABS_API_KEY || isLoadingSubscription.value) return;
+    if (apiKeys.value.length === 0 && !ELEVENLABS_API_KEY) return;
+    if (isLoadingSubscription.value) return;
 
     isLoadingSubscription.value = true;
     try {
-      const data = await audioCache.fetchSubscription();
-      if (data) {
-        subscription.value = data;
-      }
+      await refreshAllApiKeys();
     } catch (error) {
       console.error('Failed to fetch subscription:', error);
     } finally {
@@ -139,7 +252,7 @@ function createVoiceNotifications() {
 
   // Initialize audio cache and subscription on startup
   audioCache.loadCache().catch(console.error);
-  if (ELEVENLABS_API_KEY) {
+  if (apiKeys.value.length > 0 || ELEVENLABS_API_KEY) {
     refreshSubscription();
   }
 
@@ -218,14 +331,15 @@ function createVoiceNotifications() {
     isSpeaking.value = false;
   };
 
-  // Generate and play speech using ElevenLabs API (no caching)
+  // Generate and play speech using ElevenLabs API (no caching, with load balancing)
   const speak = async (text: string): Promise<void> => {
-    if (!settings.value.enabled || !ELEVENLABS_API_KEY || !text) return;
+    const apiKey = getBestApiKey();
+    if (!settings.value.enabled || !apiKey || !text) return;
 
     isSpeaking.value = true;
 
     try {
-      const result = await audioCache.generateWithoutCache(text, settings.value.voiceId);
+      const result = await audioCache.generateViaAPI(text, settings.value.voiceId, apiKey);
       await playBlob(result.blob);
     } catch (error) {
       console.error('Voice notification error:', error);
@@ -236,7 +350,8 @@ function createVoiceNotifications() {
 
   // Get or generate cached audio for project name
   const getProjectAudio = async (sourceApp: string): Promise<Blob | null> => {
-    if (!ELEVENLABS_API_KEY) return null;
+    const apiKey = getBestApiKey();
+    if (!apiKey) return null;
 
     const key = `project:${sourceApp}`;
     const text = isRussianVoice() ? `Проект ${sourceApp}` : `Project ${sourceApp}`;
@@ -321,7 +436,8 @@ function createVoiceNotifications() {
       }
 
       // 2. Build dynamic message with question and choices
-      if (ELEVENLABS_API_KEY) {
+      const hitlApiKey = getBestApiKey();
+      if (hitlApiKey) {
         let dynamicText = '';
 
         // Add question
@@ -342,7 +458,7 @@ function createVoiceNotifications() {
         // Speak the dynamic content
         if (dynamicText) {
           try {
-            const result = await audioCache.generateWithoutCache(dynamicText, settings.value.voiceId, sourceApp);
+            const result = await audioCache.generateWithoutCache(dynamicText, settings.value.voiceId, sourceApp, hitlApiKey);
             await playBlob(result.blob);
           } catch (error) {
             console.error('HITL audio error:', error);
@@ -382,11 +498,12 @@ function createVoiceNotifications() {
         }
 
         // 2. Speak commit message (first line, no truncation) - always play dynamic content
-        if (commitMsg && ELEVENLABS_API_KEY) {
+        const commitApiKey = getBestApiKey();
+        if (commitMsg && commitApiKey) {
           // First line already extracted by extractCommitMessage, read full line
           const text = `Commit: ${commitMsg}`;
           try {
-            const result = await audioCache.generateWithoutCache(text, settings.value.voiceId, sourceApp);
+            const result = await audioCache.generateWithoutCache(text, settings.value.voiceId, sourceApp, commitApiKey);
             await playBlob(result.blob);
           } catch (error) {
             console.error('Commit audio error:', error);
@@ -418,8 +535,9 @@ function createVoiceNotifications() {
 
       // 2. Start fetching dynamic summary in parallel (if exists) - always fetch dynamic
       let dynamicAudioPromise: ReturnType<typeof audioCache.generateWithoutCache> | null = null;
-      if (event.summary && ELEVENLABS_API_KEY) {
-        dynamicAudioPromise = audioCache.generateWithoutCache(event.summary, settings.value.voiceId, sourceApp);
+      const stopApiKey = getBestApiKey();
+      if (event.summary && stopApiKey) {
+        dynamicAudioPromise = audioCache.generateWithoutCache(event.summary, settings.value.voiceId, sourceApp, stopApiKey);
       }
 
       // 3. Play local "task complete" sound first (if not debounced)
@@ -468,8 +586,9 @@ function createVoiceNotifications() {
 
       // 2. Start fetching summary in parallel - always fetch dynamic
       let dynamicAudioPromise: ReturnType<typeof audioCache.generateWithoutCache> | null = null;
-      if (event.summary && ELEVENLABS_API_KEY) {
-        dynamicAudioPromise = audioCache.generateWithoutCache(event.summary, settings.value.voiceId, sourceApp);
+      const notifyApiKey = getBestApiKey();
+      if (event.summary && notifyApiKey) {
+        dynamicAudioPromise = audioCache.generateWithoutCache(event.summary, settings.value.voiceId, sourceApp, notifyApiKey);
       }
 
       // 3. Play local notification sound (if not debounced)
@@ -584,7 +703,16 @@ function createVoiceNotifications() {
     replayNotification,
     clearHistory,
     refreshSubscription,
-    audioCache
+    audioCache,
+    // Multi-key support
+    apiKeys,
+    isRefreshingKeys,
+    addApiKey,
+    removeApiKey,
+    toggleApiKey,
+    updateApiKeyLabel,
+    refreshAllApiKeys,
+    getBestApiKey
   };
 }
 
