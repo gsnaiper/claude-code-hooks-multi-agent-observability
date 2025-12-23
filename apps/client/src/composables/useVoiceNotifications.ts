@@ -5,6 +5,31 @@ import type { HookEvent } from '../types';
 const ELEVENLABS_API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY || '';
 const ELEVENLABS_VOICE_ID = import.meta.env.VITE_ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM'; // Rachel default
 
+// Russian voice IDs
+const RUSSIAN_VOICE_IDS = [
+  'XB0fDUnXU5powFXDhCwa', // Charlotte
+  'onwK4e9ZLuTAKqWW03F9', // Daniel
+  'N2lVS1w4EtoT3dr4eOWO', // Callum
+  'pFZP5JQG7iQjIQuC4Bku', // Lily
+  'bIHbv24MWmeRgasZH58o'  // Will
+];
+
+// Predefined phrases for events
+const PHRASES = {
+  en: {
+    taskComplete: 'Task completed',
+    error: 'Error occurred',
+    hitlRequest: 'Your input is needed',
+    commandFailed: 'Command failed'
+  },
+  ru: {
+    taskComplete: 'Задача завершена',
+    error: 'Произошла ошибка',
+    hitlRequest: 'Требуется ваш ввод',
+    commandFailed: 'Команда не выполнена'
+  }
+};
+
 // Voice notification settings
 export interface VoiceSettings {
   enabled: boolean;
@@ -155,22 +180,26 @@ export function useVoiceNotifications() {
     isSpeaking.value = false;
   };
 
+  // Get current language based on voice selection
+  const isRussianVoice = () => RUSSIAN_VOICE_IDS.includes(settings.value.voiceId);
+  const getPhrases = () => isRussianVoice() ? PHRASES.ru : PHRASES.en;
+
   // Notify for specific event types
   const notifyEvent = (event: HookEvent) => {
     if (!settings.value.enabled) return;
 
     const eventType = event.hook_event_type;
+    const phrases = getPhrases();
 
     // HITL notification
     if (settings.value.notifyOnHITL && event.humanInTheLoop) {
-      speak(`Attention: ${event.humanInTheLoop.question.slice(0, 100)}`);
+      speak(phrases.hitlRequest);
       return;
     }
 
     // Stop event (task complete)
     if (settings.value.notifyOnStop && eventType === 'Stop') {
-      const summary = event.summary || 'Task completed';
-      speak(summary);
+      speak(phrases.taskComplete);
       return;
     }
 
@@ -178,13 +207,14 @@ export function useVoiceNotifications() {
     if (settings.value.notifyOnError) {
       const payload = event.payload || {};
       if (payload.error || payload.exit_code !== 0) {
-        speak(`Error: ${payload.error || 'Command failed'}`);
+        speak(phrases.error);
         return;
       }
     }
 
     // Summary notification (for events with summary)
     if (settings.value.notifyOnSummary && event.summary) {
+      // For summaries, use the original text (usually English from API)
       speak(event.summary);
     }
   };
