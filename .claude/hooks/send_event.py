@@ -82,15 +82,67 @@ def send_event_to_server(event_data, server_url='http://localhost:4000/events'):
         print(f"Unexpected error: {e}", file=sys.stderr)
         return False
 
+def get_auto_project_id(cwd: str = None) -> str:
+    """
+    Auto-detect project ID using hybrid approach.
+    Imports get_project_id from lib if available, otherwise uses fallback.
+    """
+    if cwd is None:
+        cwd = os.getcwd()
+
+    try:
+        # Try to import from lib directory
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        lib_path = os.path.join(script_dir, 'lib', 'get_project_id.py')
+
+        if os.path.exists(lib_path):
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("get_project_id", lib_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module.get_project_id(cwd)
+    except Exception:
+        pass
+
+    # Fallback: simple implementation
+    import hashlib
+    from pathlib import Path
+
+    # Try git remote
+    try:
+        result = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],
+            cwd=cwd, capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            url = result.stdout.strip().removesuffix(".git")
+            parts = url.split("/")
+            if len(parts) >= 2:
+                owner = parts[-2].split(":")[-1].split("@")[-1]
+                repo = parts[-1]
+                if owner and repo:
+                    return f"{owner}:{repo}"
+    except Exception:
+        pass
+
+    # Fallback to directory hash
+    abs_path = Path(cwd).resolve()
+    path_hash = hashlib.sha256(str(abs_path).encode()).hexdigest()[:12]
+    dir_name = "".join(c if c.isalnum() or c in "-_" else "-" for c in abs_path.name)[:30]
+    return f"local:{dir_name}-{path_hash}"
+
+
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Send Claude Code hook events to observability server')
-    parser.add_argument('--source-app', required=True, help='Source application name')
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument('--source-app', help='Source application name (explicit)')
+    source_group.add_argument('--auto-project-id', action='store_true', help='Auto-detect project ID from git/directory')
     parser.add_argument('--event-type', required=True, help='Hook event type (PreToolUse, PostToolUse, etc.)')
     parser.add_argument('--server-url', default='http://localhost:4000/events', help='Server URL')
     parser.add_argument('--add-chat', action='store_true', help='Include chat transcript if available')
     parser.add_argument('--summarize', action='store_true', help='Generate AI summary of the event')
-    
+
     args = parser.parse_args()
     
     try:
@@ -107,9 +159,16 @@ def main():
     if transcript_path:
         model_name = get_model_from_transcript(session_id, transcript_path)
 
+    # Determine source_app (explicit or auto-detected)
+    if args.auto_project_id:
+        cwd = input_data.get('cwd', os.getcwd())
+        source_app = get_auto_project_id(cwd)
+    else:
+        source_app = args.source_app
+
     # Prepare event data for server
     event_data = {
-        'source_app': args.source_app,
+        'source_app': source_app,
         'session_id': session_id,
         'hook_event_type': args.event_type,
         'payload': input_data,
