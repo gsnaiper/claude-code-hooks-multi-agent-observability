@@ -36,6 +36,18 @@
           <span class="text-xs text-[var(--theme-text-tertiary)] font-medium">
             {{ formatTime(event.timestamp) }}
           </span>
+          <!-- Audio replay button for HITL -->
+          <button
+            v-if="hasAudio && voiceNotifications.settings.value.enabled"
+            @click.stop="replayEventAudio"
+            :disabled="isPlayingAudio"
+            class="ml-2 p-1 rounded-full transition-all duration-200 hover:bg-[var(--theme-bg-tertiary)] flex items-center gap-1"
+            :class="isPlayingAudio ? 'animate-pulse text-[var(--theme-primary)]' : 'text-[var(--theme-text-tertiary)] hover:text-[var(--theme-primary)]'"
+            :title="isPlayingAudio ? 'Playing...' : 'Replay audio'"
+          >
+            <span class="text-sm">{{ isPlayingAudio ? '🔊' : '🔈' }}</span>
+            <span v-if="lastReplayCost !== null" class="text-xs opacity-70">{{ lastReplayCost }}</span>
+          </button>
         </div>
       </div>
 
@@ -164,15 +176,29 @@
       <div class="hidden mobile:block mb-2">
         <!-- Mobile: App + Time on first row -->
         <div class="flex items-center justify-between mb-1">
-          <span 
+          <span
             class="text-xs font-semibold text-[var(--theme-text-primary)] px-1.5 py-0.5 rounded-full border-2 bg-[var(--theme-bg-tertiary)] shadow-md"
             :style="{ ...appBgStyle, ...appBorderStyle }"
           >
             {{ event.source_app }}
           </span>
-          <span class="text-xs text-[var(--theme-text-tertiary)] font-medium">
-            {{ formatTime(event.timestamp) }}
-          </span>
+          <div class="flex items-center space-x-1">
+            <span class="text-xs text-[var(--theme-text-tertiary)] font-medium">
+              {{ formatTime(event.timestamp) }}
+            </span>
+            <!-- Audio replay button (mobile) -->
+            <button
+              v-if="hasAudio && voiceNotifications.settings.value.enabled"
+              @click.stop="replayEventAudio"
+              :disabled="isPlayingAudio"
+              class="p-1 rounded-full transition-all duration-200 flex items-center gap-0.5"
+              :class="isPlayingAudio ? 'animate-pulse text-[var(--theme-primary)]' : 'text-[var(--theme-text-tertiary)]'"
+              :title="isPlayingAudio ? 'Playing...' : 'Replay audio'"
+            >
+              <span class="text-sm">{{ isPlayingAudio ? '🔊' : '🔈' }}</span>
+              <span v-if="lastReplayCost !== null" class="text-xs opacity-70">{{ lastReplayCost }}</span>
+            </button>
+          </div>
         </div>
         
         <!-- Mobile: Session + Event Type on second row -->
@@ -210,11 +236,25 @@
             {{ event.hook_event_type }}
           </span>
         </div>
-        <span class="text-sm text-[var(--theme-text-tertiary)] font-semibold">
-          {{ formatTime(event.timestamp) }}
-        </span>
+        <div class="flex items-center space-x-2">
+          <span class="text-sm text-[var(--theme-text-tertiary)] font-semibold">
+            {{ formatTime(event.timestamp) }}
+          </span>
+          <!-- Audio replay button -->
+          <button
+            v-if="hasAudio && voiceNotifications.settings.value.enabled"
+            @click.stop="replayEventAudio"
+            :disabled="isPlayingAudio"
+            class="p-1.5 rounded-full transition-all duration-200 hover:bg-[var(--theme-bg-tertiary)] shadow-sm flex items-center gap-1"
+            :class="isPlayingAudio ? 'animate-pulse text-[var(--theme-primary)] bg-[var(--theme-primary)]/10' : 'text-[var(--theme-text-tertiary)] hover:text-[var(--theme-primary)]'"
+            :title="isPlayingAudio ? 'Playing...' : 'Replay audio'"
+          >
+            <span class="text-base">{{ isPlayingAudio ? '🔊' : '🔈' }}</span>
+            <span v-if="lastReplayCost !== null" class="text-xs opacity-70">{{ lastReplayCost }}</span>
+          </button>
+        </div>
       </div>
-      
+
       <!-- Tool info and Summary - Desktop Layout -->
       <div class="flex items-center justify-between mb-2 mobile:hidden">
         <div v-if="toolInfo" class="text-base text-[var(--theme-text-secondary)] font-semibold">
@@ -301,6 +341,7 @@ import { ref, computed, watch } from 'vue';
 import type { HookEvent, HumanInTheLoopResponse } from '../types';
 import { useMediaQuery } from '../composables/useMediaQuery';
 import { useVoiceInput } from '../composables/useVoiceInput';
+import { useVoiceNotifications } from '../composables/useVoiceNotifications';
 import ChatTranscriptModal from './ChatTranscriptModal.vue';
 import { API_BASE_URL } from '../config';
 
@@ -333,6 +374,10 @@ const { isMobile } = useMediaQuery();
 
 // Voice input for HITL responses
 const { isRecording, transcript, isSupported: voiceSupported, toggleRecording, clearTranscript } = useVoiceInput();
+
+// Voice notifications for audio replay
+const voiceNotifications = useVoiceNotifications();
+const isPlayingAudio = ref(false);
 
 // Watch transcript changes and update response text
 watch(transcript, (newTranscript) => {
@@ -609,6 +654,93 @@ const submitChoice = async (choice: string) => {
     alert('Failed to submit choice. Please try again.');
   } finally {
     isSubmitting.value = false;
+  }
+};
+
+// Check if event has audio content that can be replayed
+const hasAudio = computed(() => {
+  if (!voiceNotifications.isConfigured.value) return false;
+
+  // HITL events with question
+  if (props.event.humanInTheLoop?.question) return true;
+
+  // Events with summary
+  if (props.event.summary) return true;
+
+  // Git commit events
+  if (props.event.hook_event_type === 'PostToolUse') {
+    const command = props.event.payload?.tool_input?.command || '';
+    if (props.event.payload?.tool_name === 'Bash' && command.includes('git commit')) {
+      return true;
+    }
+  }
+
+  return false;
+});
+
+// Get text to speak for this event
+const getEventAudioText = (): string | null => {
+  // HITL question with choices
+  if (props.event.humanInTheLoop) {
+    const hitl = props.event.humanInTheLoop;
+    let text = hitl.question || '';
+
+    if (hitl.type === 'choice' && hitl.choices?.length) {
+      const choicesText = hitl.choices.map((c, i) => `${i + 1}: ${c}`).join('. ');
+      text += `. Options: ${choicesText}`;
+    }
+    return text || null;
+  }
+
+  // Summary
+  if (props.event.summary) {
+    return props.event.summary;
+  }
+
+  // Git commit
+  if (props.event.hook_event_type === 'PostToolUse') {
+    const command = props.event.payload?.tool_input?.command || '';
+    if (props.event.payload?.tool_name === 'Bash' && command.includes('git commit')) {
+      // Extract commit message using same logic as useVoiceNotifications
+      const heredocMatch = command.match(/git commit.*-m\s*"\$\(cat\s*<<['"]?EOF['"]?\s*\n([\s\S]*?)\n\s*EOF/);
+      if (heredocMatch) {
+        const lines = heredocMatch[1].split('\n').map((l: string) => l.trim()).filter((l: string) => l);
+        if (lines[0]) return `Commit: ${lines[0]}`;
+      }
+
+      const simpleMatch = command.match(/git commit[^$]*-m\s*["']([^"'$]+)["']/);
+      if (simpleMatch) return `Commit: ${simpleMatch[1]}`;
+    }
+  }
+
+  return null;
+};
+
+// Track character cost for last replay
+const lastReplayCost = ref<number | null>(null);
+
+// Replay audio for this event
+const replayEventAudio = async () => {
+  if (isPlayingAudio.value || !voiceNotifications.settings.value.enabled) return;
+
+  const text = getEventAudioText();
+  if (!text) return;
+
+  isPlayingAudio.value = true;
+  lastReplayCost.value = null;
+
+  try {
+    const result = await voiceNotifications.audioCache.generateWithoutCache(
+      text,
+      voiceNotifications.settings.value.voiceId,
+      props.event.source_app
+    );
+    lastReplayCost.value = result.characterCost;
+    await voiceNotifications.playBlob(result.blob);
+  } catch (error) {
+    console.error('Audio replay error:', error);
+  } finally {
+    isPlayingAudio.value = false;
   }
 };
 </script>

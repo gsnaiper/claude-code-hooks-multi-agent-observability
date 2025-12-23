@@ -1,4 +1,5 @@
 import { ref } from 'vue';
+import { API_BASE_URL } from '../config';
 
 const DB_NAME = 'voiceNotifications';
 const STORE_NAME = 'audioCache';
@@ -6,6 +7,32 @@ const DB_VERSION = 1;
 
 // ElevenLabs configuration
 const ELEVENLABS_API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY || '';
+
+// Audio generation result with cost info
+export interface AudioGenerationResult {
+  blob: Blob;
+  characterCost: number;
+}
+
+// ElevenLabs subscription info
+export interface ElevenLabsSubscription {
+  characterCount: number;
+  characterLimit: number;
+  nextResetUnix: number | null;
+  tier: string;
+  status: string;
+}
+
+// Simple hash function for cache keys
+const hashText = (text: string): string => {
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    const char = text.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(36);
+};
 
 interface CachedAudio {
   key: string;
@@ -98,13 +125,54 @@ function createAudioCache() {
     }
   };
 
+  // Upload audio to backend for persistent storage
+  const uploadToBackend = async (blob: Blob, text: string, voiceId: string, sourceApp?: string): Promise<void> => {
+    try {
+      // Convert blob to base64
+      const arrayBuffer = await blob.arrayBuffer();
+      const base64 = btoa(
+        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+      );
+
+      const textHash = hashText(text);
+      const key = `${voiceId}_${textHash}`;
+
+      const response = await fetch(`${API_BASE_URL}/api/audio`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          key,
+          audioData: base64,
+          mimeType: blob.type || 'audio/mpeg',
+          voiceId,
+          textHash,
+          sourceApp
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Backend upload failed: ${response.status}`);
+      }
+
+      console.log(`[AudioCache] Uploaded to backend: ${key}`);
+    } catch (error) {
+      // Non-critical - log but don't fail
+      console.warn('[AudioCache] Backend upload failed:', error);
+    }
+  };
+
   // Get from memory cache
   const getFromCache = (key: string): Blob | null => {
     return cache.value.get(key) || null;
   };
 
+  // Track last generation cost
+  const lastCharacterCost = ref<number>(0);
+
   // Generate audio via ElevenLabs API
-  const generateViaAPI = async (text: string, voiceId: string): Promise<Blob> => {
+  const generateViaAPI = async (text: string, voiceId: string): Promise<AudioGenerationResult> => {
     if (!ELEVENLABS_API_KEY) {
       throw new Error('ElevenLabs API key not configured');
     }
@@ -133,7 +201,49 @@ function createAudioCache() {
       throw new Error(`ElevenLabs API error: ${response.status}`);
     }
 
-    return response.blob();
+    // Extract character cost from headers
+    // ElevenLabs uses 'character-cost' or falls back to text length
+    const characterCostHeader = response.headers.get('character-cost')
+      || response.headers.get('x-character-cost');
+    const characterCost = characterCostHeader
+      ? parseInt(characterCostHeader, 10)
+      : text.slice(0, 500).length; // Fallback to text length
+
+    lastCharacterCost.value = characterCost;
+
+    const blob = await response.blob();
+    return { blob, characterCost };
+  };
+
+  // Fetch ElevenLabs subscription info
+  const fetchSubscription = async (): Promise<ElevenLabsSubscription | null> => {
+    if (!ELEVENLABS_API_KEY) {
+      return null;
+    }
+
+    try {
+      const response = await fetch('https://api.elevenlabs.io/v1/user/subscription', {
+        headers: {
+          'xi-api-key': ELEVENLABS_API_KEY
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`Subscription API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      return {
+        characterCount: data.character_count,
+        characterLimit: data.character_limit,
+        nextResetUnix: data.next_character_count_reset_unix,
+        tier: data.tier,
+        status: data.status
+      };
+    } catch (error) {
+      console.error('[AudioCache] Failed to fetch subscription:', error);
+      return null;
+    }
   };
 
   // Get from cache or generate via API (with caching)
@@ -142,6 +252,7 @@ function createAudioCache() {
     const cached = cache.value.get(key);
     if (cached) {
       console.log(`[AudioCache] Hit: ${key}`);
+      lastCharacterCost.value = 0; // Cache hit = no cost
       return cached;
     }
 
@@ -164,18 +275,26 @@ function createAudioCache() {
     console.log(`[AudioCache] Miss, generating: ${key}`);
 
     try {
-      const blob = await generateViaAPI(text, voiceId);
-      await saveToCache(key, blob, text);
-      return blob;
+      const result = await generateViaAPI(text, voiceId);
+      await saveToCache(key, result.blob, text);
+      return result.blob;
     } finally {
       isLoading.value.delete(key);
     }
   };
 
-  // Generate without caching (for dynamic content)
-  const generateWithoutCache = async (text: string, voiceId: string): Promise<Blob> => {
-    console.log(`[AudioCache] Generating dynamic (no cache): ${text.slice(0, 30)}...`);
-    return generateViaAPI(text, voiceId);
+  // Generate without local caching (for dynamic content) - uploads to backend for persistence
+  // Returns blob and characterCost
+  const generateWithoutCache = async (text: string, voiceId: string, sourceApp?: string): Promise<AudioGenerationResult> => {
+    console.log(`[AudioCache] Generating dynamic: ${text.slice(0, 30)}...`);
+    const result = await generateViaAPI(text, voiceId);
+
+    // Upload to backend in background (non-blocking)
+    uploadToBackend(result.blob, text, voiceId, sourceApp).catch(() => {
+      // Already logged in uploadToBackend
+    });
+
+    return result;
   };
 
   // Clear all cached audio
@@ -207,10 +326,13 @@ function createAudioCache() {
     getFromCache,
     getOrGenerate,
     generateWithoutCache,
+    uploadToBackend,
     clearCache,
     getCacheStats,
+    fetchSubscription,
     cache,
-    isLoading
+    isLoading,
+    lastCharacterCost
   };
 }
 

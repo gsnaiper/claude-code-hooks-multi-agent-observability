@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue';
 import type { HookEvent } from '../types';
 import { useAudioCache } from './useAudioCache';
+import { playNormalized, playNormalizedUrl, stopPlayback } from './useAudioNormalizer';
 
 // ElevenLabs configuration
 const ELEVENLABS_API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY || '';
@@ -74,6 +75,15 @@ const defaultSettings: VoiceSettings = {
 const MAX_HISTORY = 20;
 let notificationIdCounter = 0;
 
+// Notification queue to prevent parallel playback
+const notificationQueue: HookEvent[] = [];
+let isProcessingQueue = false;
+
+// Debounce tracking for template audio (avoid repeating same project)
+const TEMPLATE_DEBOUNCE_MS = 10000; // 10 seconds
+let lastTemplateProject: string | null = null;
+let lastTemplateTime = 0;
+
 // Singleton instance
 let instance: ReturnType<typeof createVoiceNotifications> | null = null;
 
@@ -96,13 +106,42 @@ function createVoiceNotifications() {
 
   const settings = ref<VoiceSettings>(loadSettings());
   const isSpeaking = ref(false);
-  const currentAudio = ref<HTMLAudioElement | null>(null);
   const notificationHistory = ref<NotificationRecord[]>([]);
+
+  // Subscription state
+  const subscription = ref<{
+    characterCount: number;
+    characterLimit: number;
+    nextResetUnix: number | null;
+    tier: string;
+    status: string;
+  } | null>(null);
+  const isLoadingSubscription = ref(false);
 
   const isConfigured = computed(() => !!ELEVENLABS_API_KEY);
 
-  // Initialize audio cache on startup
+  // Fetch subscription info
+  const refreshSubscription = async () => {
+    if (!ELEVENLABS_API_KEY || isLoadingSubscription.value) return;
+
+    isLoadingSubscription.value = true;
+    try {
+      const data = await audioCache.fetchSubscription();
+      if (data) {
+        subscription.value = data;
+      }
+    } catch (error) {
+      console.error('Failed to fetch subscription:', error);
+    } finally {
+      isLoadingSubscription.value = false;
+    }
+  };
+
+  // Initialize audio cache and subscription on startup
   audioCache.loadCache().catch(console.error);
+  if (ELEVENLABS_API_KEY) {
+    refreshSubscription();
+  }
 
   // Save settings to localStorage
   const saveSettings = () => {
@@ -129,64 +168,53 @@ function createVoiceNotifications() {
   const isRussianVoice = () => RUSSIAN_VOICE_IDS.includes(settings.value.voiceId);
   const getLocalAudio = () => isRussianVoice() ? LOCAL_AUDIO.ru : LOCAL_AUDIO.en;
 
+  // Check if template audio should be played (debounce same project)
+  const shouldPlayTemplate = (sourceApp: string): boolean => {
+    const now = Date.now();
+    if (lastTemplateProject === sourceApp && (now - lastTemplateTime) < TEMPLATE_DEBOUNCE_MS) {
+      return false; // Skip template - same project recently played
+    }
+    lastTemplateProject = sourceApp;
+    lastTemplateTime = now;
+    return true;
+  };
+
   // Extract commit message from git commit command
   const extractCommitMessage = (command: string): string | null => {
-    // Pattern 1: git commit -m "message" or git commit -m 'message'
-    const match1 = command.match(/git commit[^"']*-m\s*["']([^"']+)["']/);
-    if (match1) return match1[1];
+    // Pattern 1: HEREDOC style (check first - more specific)
+    // git commit -m "$(cat <<'EOF'\n message \n EOF)"
+    const heredocMatch = command.match(/git commit.*-m\s*"\$\(cat\s*<<['"]?EOF['"]?\s*\n([\s\S]*?)\n\s*EOF/);
+    if (heredocMatch) {
+      // Get first non-empty line as commit message
+      const lines = heredocMatch[1].split('\n').map(l => l.trim()).filter(l => l);
+      return lines[0] || null;
+    }
 
-    // Pattern 2: HEREDOC style - git commit -m "$(cat <<'EOF'\nmessage\nEOF\n)"
-    const match2 = command.match(/git commit.*\$\(cat\s*<<['"]?EOF['"]?\s*\n([\s\S]*?)\n\s*EOF/);
-    if (match2) return match2[1].split('\n')[0].trim(); // First line only
+    // Pattern 2: Simple -m "message" (no HEREDOC)
+    // Must NOT contain $( to avoid partial HEREDOC match
+    const simpleMatch = command.match(/git commit[^$]*-m\s*["']([^"'$]+)["']/);
+    if (simpleMatch) return simpleMatch[1];
 
     return null;
   };
 
-  // Play audio blob
+  // Play audio blob with volume normalization
   const playBlob = async (blob: Blob): Promise<void> => {
-    const audioUrl = URL.createObjectURL(blob);
-    const audio = new Audio(audioUrl);
-    audio.volume = settings.value.volume;
-    currentAudio.value = audio;
-
-    try {
-      await new Promise<void>((resolve, reject) => {
-        audio.onended = () => {
-          URL.revokeObjectURL(audioUrl);
-          resolve();
-        };
-        audio.onerror = () => {
-          URL.revokeObjectURL(audioUrl);
-          reject(new Error('Audio playback failed'));
-        };
-        audio.play().catch(reject);
-      });
-    } finally {
-      currentAudio.value = null;
-    }
+    await playNormalized(blob, settings.value.volume);
   };
 
-  // Play local audio file (instant, no API call)
+  // Play local audio file with volume normalization
   const playLocalAudio = async (audioPath: string): Promise<void> => {
     if (!settings.value.enabled) return;
 
     isSpeaking.value = true;
 
     try {
-      const audio = new Audio(audioPath);
-      audio.volume = settings.value.volume;
-      currentAudio.value = audio;
-
-      await new Promise<void>((resolve, reject) => {
-        audio.onended = () => resolve();
-        audio.onerror = () => reject(new Error('Audio playback failed'));
-        audio.play().catch(reject);
-      });
+      await playNormalizedUrl(audioPath, settings.value.volume);
     } catch (error) {
       console.error('Local audio playback error:', error);
     }
 
-    currentAudio.value = null;
     isSpeaking.value = false;
   };
 
@@ -197,8 +225,8 @@ function createVoiceNotifications() {
     isSpeaking.value = true;
 
     try {
-      const blob = await audioCache.generateWithoutCache(text, settings.value.voiceId);
-      await playBlob(blob);
+      const result = await audioCache.generateWithoutCache(text, settings.value.voiceId);
+      await playBlob(result.blob);
     } catch (error) {
       console.error('Voice notification error:', error);
     }
@@ -268,15 +296,12 @@ function createVoiceNotifications() {
 
   // Stop current playback
   const stop = () => {
-    if (currentAudio.value) {
-      currentAudio.value.pause();
-      currentAudio.value = null;
-    }
+    stopPlayback();
     isSpeaking.value = false;
   };
 
-  // Notify for specific event types with project context
-  const notifyEvent = async (event: HookEvent) => {
+  // Process a single notification event (internal)
+  const processEvent = async (event: HookEvent) => {
     if (!settings.value.enabled) return;
 
     const eventType = event.hook_event_type;
@@ -284,9 +309,46 @@ function createVoiceNotifications() {
     const sourceApp = event.source_app || 'unknown';
     const sessionId = event.session_id || '';
 
-    // HITL notification (local audio)
+    // HITL notification (local audio + dynamic question/choices)
     if (settings.value.notifyOnHITL && event.humanInTheLoop) {
-      await playLocalAudio(localAudio.hitlRequest);
+      isSpeaking.value = true;
+      const hitl = event.humanInTheLoop;
+      const playTemplate = shouldPlayTemplate(sourceApp);
+
+      // 1. Play local HITL sound (if not debounced)
+      if (playTemplate) {
+        await playLocalAudio(localAudio.hitlRequest);
+      }
+
+      // 2. Build dynamic message with question and choices
+      if (ELEVENLABS_API_KEY) {
+        let dynamicText = '';
+
+        // Add question
+        if (hitl.question) {
+          dynamicText = hitl.question;
+        }
+
+        // Add choices if available
+        if (hitl.type === 'choice' && hitl.choices && hitl.choices.length > 0) {
+          const choicesText = hitl.choices
+            .map((c, i) => `${i + 1}: ${c}`)
+            .join('. ');
+          dynamicText += isRussianVoice()
+            ? `. Варианты: ${choicesText}`
+            : `. Options: ${choicesText}`;
+        }
+
+        // Speak the dynamic content
+        if (dynamicText) {
+          try {
+            const result = await audioCache.generateWithoutCache(dynamicText, settings.value.voiceId, sourceApp);
+            await playBlob(result.blob);
+          } catch (error) {
+            console.error('HITL audio error:', error);
+          }
+        }
+      }
 
       // Add to history
       addToHistory({
@@ -294,10 +356,12 @@ function createVoiceNotifications() {
         type: 'hitl',
         sourceApp,
         sessionId,
-        message: isRussianVoice()
+        message: hitl.question || (isRussianVoice()
           ? `${sourceApp}: Требуется ваш ввод`
-          : `${sourceApp}: Human input required`
+          : `${sourceApp}: Human input required`)
       });
+
+      isSpeaking.value = false;
       return;
     }
 
@@ -310,16 +374,20 @@ function createVoiceNotifications() {
         const commitMsg = extractCommitMessage(command);
         isSpeaking.value = true;
 
-        // 1. Play local "commit" sound
-        await playLocalAudio(localAudio.commit);
+        const playTemplate = shouldPlayTemplate(sourceApp);
 
-        // 2. Speak brief commit info (if message extracted)
+        // 1. Play local "commit" sound (if not debounced)
+        if (playTemplate) {
+          await playLocalAudio(localAudio.commit);
+        }
+
+        // 2. Speak commit message (first line, no truncation) - always play dynamic content
         if (commitMsg && ELEVENLABS_API_KEY) {
-          const brief = commitMsg.slice(0, 60); // First 60 chars max
-          const text = isRussianVoice() ? `Commit: ${brief}` : `Commit: ${brief}`;
+          // First line already extracted by extractCommitMessage, read full line
+          const text = `Commit: ${commitMsg}`;
           try {
-            const blob = await audioCache.generateWithoutCache(text, settings.value.voiceId);
-            await playBlob(blob);
+            const result = await audioCache.generateWithoutCache(text, settings.value.voiceId, sourceApp);
+            await playBlob(result.blob);
           } catch (error) {
             console.error('Commit audio error:', error);
           }
@@ -343,29 +411,33 @@ function createVoiceNotifications() {
     if (settings.value.notifyOnStop && eventType === 'Stop') {
       isSpeaking.value = true;
 
-      // 1. Start fetching project audio (cached or API) in parallel
-      const projectAudioPromise = getProjectAudio(sourceApp);
+      const playTemplate = shouldPlayTemplate(sourceApp);
 
-      // 2. Start fetching dynamic summary in parallel (if exists)
-      let dynamicAudioPromise: Promise<Blob> | null = null;
+      // 1. Start fetching project audio (cached or API) in parallel - only if playing template
+      const projectAudioPromise = playTemplate ? getProjectAudio(sourceApp) : null;
+
+      // 2. Start fetching dynamic summary in parallel (if exists) - always fetch dynamic
+      let dynamicAudioPromise: ReturnType<typeof audioCache.generateWithoutCache> | null = null;
       if (event.summary && ELEVENLABS_API_KEY) {
-        dynamicAudioPromise = audioCache.generateWithoutCache(event.summary, settings.value.voiceId);
+        dynamicAudioPromise = audioCache.generateWithoutCache(event.summary, settings.value.voiceId, sourceApp);
       }
 
-      // 3. Play local "task complete" sound first
-      await playLocalAudio(localAudio.taskComplete);
+      // 3. Play local "task complete" sound first (if not debounced)
+      if (playTemplate) {
+        await playLocalAudio(localAudio.taskComplete);
 
-      // 4. Play cached project name
-      const projectAudio = await projectAudioPromise;
-      if (projectAudio) {
-        await playBlob(projectAudio);
+        // 4. Play cached project name
+        const projectAudio = await projectAudioPromise;
+        if (projectAudio) {
+          await playBlob(projectAudio);
+        }
       }
 
-      // 5. Play dynamic summary (should be ready by now)
+      // 5. Play dynamic summary (always play dynamic content)
       if (dynamicAudioPromise) {
         try {
-          const dynamicAudio = await dynamicAudioPromise;
-          await playBlob(dynamicAudio);
+          const result = await dynamicAudioPromise;
+          await playBlob(result.blob);
         } catch (error) {
           console.error('Dynamic audio error:', error);
         }
@@ -389,29 +461,33 @@ function createVoiceNotifications() {
     if (settings.value.notifyOnNotification && eventType === 'Notification') {
       isSpeaking.value = true;
 
-      // 1. Start fetching project audio in parallel
-      const projectAudioPromise = getProjectAudio(sourceApp);
+      const playTemplate = shouldPlayTemplate(sourceApp);
 
-      // 2. Start fetching summary in parallel
-      let dynamicAudioPromise: Promise<Blob> | null = null;
+      // 1. Start fetching project audio in parallel - only if playing template
+      const projectAudioPromise = playTemplate ? getProjectAudio(sourceApp) : null;
+
+      // 2. Start fetching summary in parallel - always fetch dynamic
+      let dynamicAudioPromise: ReturnType<typeof audioCache.generateWithoutCache> | null = null;
       if (event.summary && ELEVENLABS_API_KEY) {
-        dynamicAudioPromise = audioCache.generateWithoutCache(event.summary, settings.value.voiceId);
+        dynamicAudioPromise = audioCache.generateWithoutCache(event.summary, settings.value.voiceId, sourceApp);
       }
 
-      // 3. Play local notification sound
-      await playLocalAudio(localAudio.notification);
+      // 3. Play local notification sound (if not debounced)
+      if (playTemplate) {
+        await playLocalAudio(localAudio.notification);
 
-      // 4. Play cached project name
-      const projectAudio = await projectAudioPromise;
-      if (projectAudio) {
-        await playBlob(projectAudio);
+        // 4. Play cached project name
+        const projectAudio = await projectAudioPromise;
+        if (projectAudio) {
+          await playBlob(projectAudio);
+        }
       }
 
-      // 5. Play dynamic content
+      // 5. Play dynamic content (always)
       if (dynamicAudioPromise) {
         try {
-          const dynamicAudio = await dynamicAudioPromise;
-          await playBlob(dynamicAudio);
+          const result = await dynamicAudioPromise;
+          await playBlob(result.blob);
         } catch (error) {
           console.error('Dynamic audio error:', error);
         }
@@ -464,11 +540,38 @@ function createVoiceNotifications() {
     }
   };
 
+  // Process queue sequentially to prevent audio overlap
+  const processQueue = async () => {
+    if (isProcessingQueue) return;
+    isProcessingQueue = true;
+
+    while (notificationQueue.length > 0) {
+      const event = notificationQueue.shift();
+      if (event) {
+        try {
+          await processEvent(event);
+        } catch (error) {
+          console.error('Error processing notification:', error);
+        }
+      }
+    }
+
+    isProcessingQueue = false;
+  };
+
+  // Public method to queue and process notifications
+  const notifyEvent = (event: HookEvent) => {
+    notificationQueue.push(event);
+    processQueue();
+  };
+
   return {
     settings,
     isConfigured,
     isSpeaking,
     notificationHistory,
+    subscription,
+    isLoadingSubscription,
     updateSettings,
     toggleEnabled,
     speak,
@@ -480,6 +583,7 @@ function createVoiceNotifications() {
     addToHistory,
     replayNotification,
     clearHistory,
+    refreshSubscription,
     audioCache
   };
 }

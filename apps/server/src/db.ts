@@ -120,6 +120,27 @@ export function initDatabase(): void {
   db.exec('CREATE INDEX IF NOT EXISTS idx_themes_createdAt ON themes(createdAt)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_theme_shares_token ON theme_shares(shareToken)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_theme_ratings_theme ON theme_ratings(themeId)');
+
+  // Create audio_cache table for persistent audio storage
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS audio_cache (
+      id TEXT PRIMARY KEY,
+      key TEXT NOT NULL UNIQUE,
+      audio_data TEXT NOT NULL,
+      mime_type TEXT NOT NULL DEFAULT 'audio/mpeg',
+      voice_id TEXT,
+      text_hash TEXT,
+      source_app TEXT,
+      created_at INTEGER NOT NULL,
+      accessed_at INTEGER NOT NULL,
+      access_count INTEGER DEFAULT 1,
+      size_bytes INTEGER
+    )
+  `);
+
+  db.exec('CREATE INDEX IF NOT EXISTS idx_audio_cache_key ON audio_cache(key)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_audio_cache_source_app ON audio_cache(source_app)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_audio_cache_created_at ON audio_cache(created_at)');
 }
 
 export function insertEvent(event: HookEvent): HookEvent {
@@ -382,6 +403,101 @@ export function updateEventHITLResponse(id: number, response: any): HookEvent | 
     humanInTheLoopStatus: row.humanInTheLoopStatus ? JSON.parse(row.humanInTheLoopStatus) : undefined,
     model_name: row.model_name || undefined
   };
+}
+
+// Audio cache functions
+export interface AudioCacheEntry {
+  id: string;
+  key: string;
+  audioData: string; // base64 encoded
+  mimeType: string;
+  voiceId?: string;
+  textHash?: string;
+  sourceApp?: string;
+  createdAt: number;
+  accessedAt: number;
+  accessCount: number;
+  sizeBytes?: number;
+}
+
+export function insertAudioCache(entry: Omit<AudioCacheEntry, 'id' | 'createdAt' | 'accessedAt' | 'accessCount'>): AudioCacheEntry {
+  const id = crypto.randomUUID();
+  const now = Date.now();
+
+  const stmt = db.prepare(`
+    INSERT INTO audio_cache (id, key, audio_data, mime_type, voice_id, text_hash, source_app, created_at, accessed_at, access_count, size_bytes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  stmt.run(
+    id,
+    entry.key,
+    entry.audioData,
+    entry.mimeType || 'audio/mpeg',
+    entry.voiceId || null,
+    entry.textHash || null,
+    entry.sourceApp || null,
+    now,
+    now,
+    1,
+    entry.sizeBytes || null
+  );
+
+  return {
+    id,
+    key: entry.key,
+    audioData: entry.audioData,
+    mimeType: entry.mimeType || 'audio/mpeg',
+    voiceId: entry.voiceId,
+    textHash: entry.textHash,
+    sourceApp: entry.sourceApp,
+    createdAt: now,
+    accessedAt: now,
+    accessCount: 1,
+    sizeBytes: entry.sizeBytes
+  };
+}
+
+export function getAudioCacheByKey(key: string): AudioCacheEntry | null {
+  const stmt = db.prepare('SELECT * FROM audio_cache WHERE key = ?');
+  const row = stmt.get(key) as any;
+
+  if (!row) return null;
+
+  // Update access stats
+  db.prepare('UPDATE audio_cache SET accessed_at = ?, access_count = access_count + 1 WHERE id = ?')
+    .run(Date.now(), row.id);
+
+  return {
+    id: row.id,
+    key: row.key,
+    audioData: row.audio_data,
+    mimeType: row.mime_type,
+    voiceId: row.voice_id,
+    textHash: row.text_hash,
+    sourceApp: row.source_app,
+    createdAt: row.created_at,
+    accessedAt: row.accessed_at,
+    accessCount: row.access_count,
+    sizeBytes: row.size_bytes
+  };
+}
+
+export function getAudioCacheStats(): { count: number; totalSize: number; keys: string[] } {
+  const countResult = db.prepare('SELECT COUNT(*) as count, SUM(size_bytes) as total FROM audio_cache').get() as any;
+  const keysResult = db.prepare('SELECT key FROM audio_cache ORDER BY accessed_at DESC LIMIT 100').all() as any[];
+
+  return {
+    count: countResult?.count || 0,
+    totalSize: countResult?.total || 0,
+    keys: keysResult.map(r => r.key)
+  };
+}
+
+export function deleteOldAudioCache(olderThanMs: number = 7 * 24 * 60 * 60 * 1000): number {
+  const cutoff = Date.now() - olderThanMs;
+  const result = db.prepare('DELETE FROM audio_cache WHERE accessed_at < ?').run(cutoff);
+  return result.changes;
 }
 
 export { db };

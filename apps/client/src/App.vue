@@ -143,6 +143,7 @@
       :is-speaking="isSpeaking"
       :notification-history="notificationHistory"
       :cache-stats="cacheStats"
+      :subscription="voiceSubscription"
       @close="showVoiceSettings = false"
       @toggle-enabled="toggleVoice"
       @update:settings="updateVoiceSettings"
@@ -204,7 +205,8 @@ const {
   notificationHistory,
   replayNotification,
   clearHistory: clearVoiceHistory,
-  audioCache
+  audioCache,
+  subscription: voiceSubscription
 } = useVoiceNotifications();
 
 // Cache stats for UI

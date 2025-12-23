@@ -252,6 +252,32 @@
             </div>
           </div>
 
+          <!-- ElevenLabs Usage -->
+          <div v-if="subscription" class="bg-[var(--theme-bg-secondary)] rounded-lg p-4 border border-[var(--theme-border)]">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="font-semibold text-[var(--theme-text-primary)]">📊 ElevenLabs Usage</h3>
+              <span class="text-xs px-2 py-0.5 rounded-full bg-[var(--theme-bg-tertiary)]" :class="subscription.status === 'active' ? 'text-green-500' : 'text-yellow-500'">
+                {{ subscription.tier }}
+              </span>
+            </div>
+            <div class="flex items-center gap-2 mb-2">
+              <div class="flex-1 h-2 bg-gray-300 dark:bg-gray-600 rounded-full overflow-hidden">
+                <div
+                  class="h-full transition-all duration-300"
+                  :class="usagePercent > 90 ? 'bg-red-500' : usagePercent > 70 ? 'bg-yellow-500' : 'bg-green-500'"
+                  :style="{ width: usagePercent + '%' }"
+                ></div>
+              </div>
+              <span class="text-sm text-[var(--theme-text-secondary)] font-medium w-12 text-right">{{ usagePercent }}%</span>
+            </div>
+            <p class="text-sm text-[var(--theme-text-secondary)]">
+              {{ formatNumber(subscription.characterCount) }} / {{ formatNumber(subscription.characterLimit) }} chars
+            </p>
+            <p class="text-xs text-[var(--theme-text-tertiary)] mt-1">
+              Resets: {{ formatResetDate(subscription.nextResetUnix) }}
+            </p>
+          </div>
+
           <!-- Cache Info -->
           <div class="bg-[var(--theme-bg-secondary)] rounded-lg p-4 border border-[var(--theme-border)]">
             <h3 class="font-semibold text-[var(--theme-text-primary)] mb-2">💾 Audio Cache</h3>
@@ -285,15 +311,38 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { VoiceSettings, NotificationRecord } from '../composables/useVoiceNotifications';
 
-defineProps<{
+const props = defineProps<{
   isOpen: boolean;
   settings: VoiceSettings;
   isSpeaking: boolean;
   notificationHistory: NotificationRecord[];
   cacheStats: { itemCount: number; keys: string[] };
+  subscription: {
+    characterCount: number;
+    characterLimit: number;
+    nextResetUnix: number | null;
+    tier: string;
+    status: string;
+  } | null;
 }>();
+
+// Computed for usage display
+const usagePercent = computed(() => {
+  if (!props.subscription) return 0;
+  return Math.round((props.subscription.characterCount / props.subscription.characterLimit) * 100);
+});
+
+const formatNumber = (n: number): string => {
+  return n.toLocaleString();
+};
+
+const formatResetDate = (unix: number | null): string => {
+  if (!unix) return 'N/A';
+  return new Date(unix * 1000).toLocaleDateString();
+};
 
 const emit = defineEmits<{
   close: [];

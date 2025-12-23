@@ -1,4 +1,4 @@
-import { initDatabase, insertEvent, getFilterOptions, getRecentEvents, updateEventHITLResponse } from './db';
+import { initDatabase, insertEvent, getFilterOptions, getRecentEvents, updateEventHITLResponse, insertAudioCache, getAudioCacheByKey, getAudioCacheStats, deleteOldAudioCache } from './db';
 import type { HookEvent, HumanInTheLoopResponse } from './types';
 import { 
   createTheme, 
@@ -404,7 +404,142 @@ const server = Bun.serve({
         headers: { ...headers, 'Content-Type': 'application/json' }
       });
     }
-    
+
+    // ============= AUDIO CACHE API =============
+
+    // POST /api/audio - Store audio in cache
+    if (url.pathname === '/api/audio' && req.method === 'POST') {
+      try {
+        const body = await req.json();
+        const { key, audioData, mimeType, voiceId, textHash, sourceApp } = body;
+
+        if (!key || !audioData) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Missing required fields: key and audioData'
+          }), {
+            status: 400,
+            headers: { ...headers, 'Content-Type': 'application/json' }
+          });
+        }
+
+        // Check if already exists
+        const existing = getAudioCacheByKey(key);
+        if (existing) {
+          return new Response(JSON.stringify({
+            success: true,
+            data: { id: existing.id, key: existing.key },
+            message: 'Audio already cached'
+          }), {
+            headers: { ...headers, 'Content-Type': 'application/json' }
+          });
+        }
+
+        // Calculate size from base64
+        const sizeBytes = Math.ceil((audioData.length * 3) / 4);
+
+        const entry = insertAudioCache({
+          key,
+          audioData,
+          mimeType: mimeType || 'audio/mpeg',
+          voiceId,
+          textHash,
+          sourceApp,
+          sizeBytes
+        });
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: { id: entry.id, key: entry.key },
+          message: 'Audio cached successfully'
+        }), {
+          status: 201,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('Audio cache error:', error);
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Failed to cache audio'
+        }), {
+          status: 500,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // GET /api/audio/:key - Retrieve audio from cache
+    if (url.pathname.startsWith('/api/audio/') && req.method === 'GET') {
+      const key = decodeURIComponent(url.pathname.slice('/api/audio/'.length));
+
+      if (!key) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Missing audio key'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      const entry = getAudioCacheByKey(key);
+
+      if (!entry) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Audio not found'
+        }), {
+          status: 404,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      // Return audio as base64 JSON or as binary
+      const returnBinary = url.searchParams.get('binary') === 'true';
+
+      if (returnBinary) {
+        const buffer = Buffer.from(entry.audioData, 'base64');
+        return new Response(buffer, {
+          headers: {
+            ...headers,
+            'Content-Type': entry.mimeType,
+            'Content-Length': buffer.length.toString()
+          }
+        });
+      }
+
+      return new Response(JSON.stringify({
+        success: true,
+        data: entry
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // GET /api/audio-stats - Get audio cache statistics
+    if (url.pathname === '/api/audio-stats' && req.method === 'GET') {
+      const stats = getAudioCacheStats();
+      return new Response(JSON.stringify({
+        success: true,
+        data: stats
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // DELETE /api/audio/cleanup - Cleanup old audio entries
+    if (url.pathname === '/api/audio/cleanup' && req.method === 'DELETE') {
+      const days = parseInt(url.searchParams.get('days') || '7');
+      const deleted = deleteOldAudioCache(days * 24 * 60 * 60 * 1000);
+      return new Response(JSON.stringify({
+        success: true,
+        data: { deleted },
+        message: `Deleted ${deleted} old audio entries`
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
     // WebSocket upgrade
     if (url.pathname === '/stream') {
       const success = server.upgrade(req);
