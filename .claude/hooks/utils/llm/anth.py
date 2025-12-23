@@ -26,12 +26,16 @@ def prompt_llm(prompt_text):
 
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
+        print("ANTHROPIC_API_KEY not set", file=sys.stderr)
         return None
 
     try:
         import anthropic
 
-        client = anthropic.Anthropic(api_key=api_key)
+        client = anthropic.Anthropic(
+            api_key=api_key,
+            timeout=10.0  # 10 second timeout
+        )
 
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",  # Haiku 4.5 - Fastest, most efficient model (TOP PRIORITY)
@@ -42,7 +46,11 @@ def prompt_llm(prompt_text):
 
         return message.content[0].text.strip()
 
-    except Exception:
+    except anthropic.APITimeoutError:
+        print("API timeout", file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"API error: {e}", file=sys.stderr)
         return None
 
 

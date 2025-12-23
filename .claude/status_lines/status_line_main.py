@@ -22,6 +22,17 @@ except ImportError:
 # Configuration
 MAX_PROMPT_LENGTH = 50  # Adjustable: Maximum characters to display for prompt
 SHOW_GIT_INFO = False  # Set to True to show git branch and status
+CACHE_FILE = Path.home() / ".claude" / "cache" / "status.txt"
+
+
+def get_cached_activity() -> str:
+    """Read activity status from cache file."""
+    try:
+        if CACHE_FILE.exists():
+            return CACHE_FILE.read_text().strip()[:50]
+    except Exception:
+        pass
+    return ""
 
 
 def log_status_line(input_data, status_line_output, error_message=None):
@@ -96,18 +107,9 @@ def get_git_status():
 
 
 def get_session_data(session_id):
-    """Get session data including agent name and prompts."""
-    session_file = Path(f".claude/data/sessions/{session_id}.json")
-
-    if not session_file.exists():
-        return None, f"Session file {session_file} does not exist"
-
-    try:
-        with open(session_file, "r") as f:
-            session_data = json.load(f)
-            return session_data, None
-    except Exception as e:
-        return None, f"Error reading session file: {str(e)}"
+    """Get session data - returns None since we use input_data directly."""
+    # Session files are not needed - we get all info from stdin input_data
+    return None, None
 
 
 def truncate_prompt(prompt, max_length=MAX_PROMPT_LENGTH):
@@ -140,36 +142,36 @@ def get_prompt_icon(prompt):
 
 
 def generate_status_line(input_data):
-    """Generate the status line with agent name and most recent prompt."""
+    """Generate the status line from input_data directly."""
     # Extract session ID from input data
     session_id = input_data.get("session_id", "unknown")
+    short_session = session_id[:8] if len(session_id) > 8 else session_id
 
-    # Get model name
+    # Get model name from input_data
     model_info = input_data.get("model", {})
-    model_name = model_info.get("display_name", "Claude")
+    if isinstance(model_info, dict):
+        model_name = model_info.get("display_name") or model_info.get("name", "Claude")
+    else:
+        model_name = str(model_info) if model_info else "Claude"
 
-    # Get session data
-    session_data, error = get_session_data(session_id)
-
-    if error:
-        # Log the error but show a default message
-        log_status_line(input_data, f"[{model_name}] 💭 No session data", error)
-        return f"\033[36m[{model_name}]\033[0m \033[90m💭 No session data\033[0m"
-
-    # Extract agent name and prompts
-    agent_name = session_data.get("agent_name", "Agent")
-    prompts = session_data.get("prompts", [])
+    # Get CWD for project context
+    cwd = input_data.get("cwd", "")
+    project_name = Path(cwd).name if cwd else "unknown"
 
     # Build status line components
     parts = []
 
-    # Agent name - Red
-    parts.append(f"\033[91m[{agent_name}]\033[0m")
+    # Model name - Cyan
+    parts.append(f"\033[36m[{model_name}]\033[0m")
 
-    # Model name - Blue
-    parts.append(f"\033[34m[{model_name}]\033[0m")
+    # Session ID - Yellow (short)
+    parts.append(f"\033[33m{short_session}\033[0m")
 
-    # Git branch and status - green (optional)
+    # Project name - Green
+    if project_name and project_name != "unknown":
+        parts.append(f"\033[32m📁 {project_name}\033[0m")
+
+    # Git branch (optional)
     if SHOW_GIT_INFO:
         git_branch = get_git_branch()
         if git_branch:
@@ -179,17 +181,14 @@ def generate_status_line(input_data):
                 git_info += f" {git_status}"
             parts.append(f"\033[32m{git_info}\033[0m")
 
-    # Most recent prompt only
-    if prompts:
-        current_prompt = prompts[-1]
-        icon = get_prompt_icon(current_prompt)
-        truncated = truncate_prompt(current_prompt, MAX_PROMPT_LENGTH)
-        parts.append(f"{icon} \033[97m{truncated}\033[0m")
-    else:
-        parts.append("\033[90m💭 No prompts yet\033[0m")
-
     # Join with separator
     status_line = " | ".join(parts)
+
+    # Activity from cache on separate line
+    activity = get_cached_activity()
+    if activity:
+        icon = get_prompt_icon(activity)
+        status_line += f"\n\033[35m{icon} {activity}\033[0m"  # Magenta on new line
 
     return status_line
 

@@ -9,7 +9,21 @@
 
 import json
 from typing import Optional, Dict, Any
+from pathlib import Path
 from .llm.anth import prompt_llm
+
+# Cache for statusline
+CACHE_DIR = Path.home() / ".claude" / "cache"
+CACHE_FILE = CACHE_DIR / "status.txt"
+
+
+def write_to_cache(summary: str):
+    """Write summary to cache file for statusline."""
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        CACHE_FILE.write_text(summary)
+    except Exception:
+        pass  # Non-critical, don't fail
 
 
 def generate_event_summary(event_data: Dict[str, Any]) -> Optional[str]:
@@ -64,5 +78,7 @@ Generate the summary based on the payload:"""
         # Ensure it's not too long
         if len(summary) > 100:
             summary = summary[:97] + "..."
+        # Write to cache for statusline
+        write_to_cache(summary)
 
     return summary
