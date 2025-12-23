@@ -65,14 +65,29 @@
 
       <!-- Response UI -->
       <div v-if="event.humanInTheLoop.type === 'question'">
-        <!-- Text Input for Questions -->
-        <textarea
-          v-model="responseText"
-          class="w-full p-3 border-2 border-yellow-500 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent resize-none"
-          rows="3"
-          placeholder="Type your response here..."
-          @click.stop
-        ></textarea>
+        <!-- Text Input for Questions with Voice Input -->
+        <div class="relative">
+          <textarea
+            v-model="responseText"
+            class="w-full p-3 pr-14 border-2 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent resize-none transition-colors"
+            :class="isRecording ? 'border-red-500 bg-red-50 dark:bg-red-900/20' : 'border-yellow-500'"
+            rows="3"
+            :placeholder="isRecording ? 'Listening...' : 'Type your response here...'"
+            @click.stop
+          ></textarea>
+          <!-- Microphone Button (inside textarea) -->
+          <button
+            v-if="voiceSupported"
+            @click.stop="toggleRecording('ru-RU')"
+            class="absolute right-3 top-3 p-2 rounded-lg transition-all duration-200 shadow-md hover:shadow-lg"
+            :class="isRecording
+              ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
+              : 'bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200'"
+            :title="isRecording ? 'Stop recording' : 'Start voice input'"
+          >
+            <span class="text-xl">{{ isRecording ? '🔴' : '🎤' }}</span>
+          </button>
+        </div>
         <div class="flex justify-end space-x-2 mt-2">
           <button
             @click.stop="submitResponse"
@@ -282,9 +297,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import type { HookEvent, HumanInTheLoopResponse } from '../types';
 import { useMediaQuery } from '../composables/useMediaQuery';
+import { useVoiceInput } from '../composables/useVoiceInput';
 import ChatTranscriptModal from './ChatTranscriptModal.vue';
 import { API_BASE_URL } from '../config';
 
@@ -314,6 +330,16 @@ const localResponse = ref<HumanInTheLoopResponse | null>(null); // Optimistic UI
 
 // Media query for responsive design
 const { isMobile } = useMediaQuery();
+
+// Voice input for HITL responses
+const { isRecording, transcript, isSupported: voiceSupported, toggleRecording, clearTranscript } = useVoiceInput();
+
+// Watch transcript changes and update response text
+watch(transcript, (newTranscript) => {
+  if (newTranscript) {
+    responseText.value = newTranscript;
+  }
+});
 
 const toggleExpanded = () => {
   isExpanded.value = !isExpanded.value;
@@ -491,6 +517,7 @@ const submitResponse = async () => {
   hasSubmittedResponse.value = true;
   const savedText = responseText.value;
   responseText.value = '';
+  clearTranscript(); // Clear voice input state
   isSubmitting.value = true;
 
   try {

@@ -3,7 +3,7 @@
     <Transition name="slide">
       <div
         v-if="isOpen"
-        class="fixed right-0 top-0 h-full w-80 bg-[var(--theme-bg-primary)] shadow-2xl z-50 flex flex-col border-l border-[var(--theme-border)]"
+        class="fixed right-0 top-0 h-full w-96 bg-[var(--theme-bg-primary)] shadow-2xl z-50 flex flex-col border-l border-[var(--theme-border)]"
       >
         <!-- Header -->
         <div class="flex items-center justify-between p-4 border-b border-[var(--theme-border)] bg-[var(--theme-bg-secondary)]">
@@ -19,7 +19,7 @@
         </div>
 
         <!-- Content -->
-        <div class="flex-1 overflow-y-auto p-4 space-y-6">
+        <div class="flex-1 overflow-y-auto p-4 space-y-4">
           <!-- Master Toggle -->
           <div class="bg-[var(--theme-bg-secondary)] rounded-lg p-4 border border-[var(--theme-border)]">
             <div class="flex items-center justify-between">
@@ -72,6 +72,20 @@
                   type="checkbox"
                   :checked="settings.notifyOnStop"
                   @change="updateSetting('notifyOnStop', ($event.target as HTMLInputElement).checked)"
+                  class="w-5 h-5 rounded accent-[var(--theme-primary)]"
+                />
+              </label>
+
+              <!-- Notifications -->
+              <label class="flex items-center justify-between cursor-pointer">
+                <div class="flex items-center gap-2">
+                  <span>🔔</span>
+                  <span class="text-[var(--theme-text-primary)]">Notifications</span>
+                </div>
+                <input
+                  type="checkbox"
+                  :checked="settings.notifyOnNotification"
+                  @change="updateSetting('notifyOnNotification', ($event.target as HTMLInputElement).checked)"
                   class="w-5 h-5 rounded accent-[var(--theme-primary)]"
                 />
               </label>
@@ -158,6 +172,82 @@
             <span>{{ isSpeaking ? '🔊' : '🔔' }}</span>
             {{ isSpeaking ? 'Speaking...' : 'Test Voice' }}
           </button>
+
+          <!-- Notification History -->
+          <div class="bg-[var(--theme-bg-secondary)] rounded-lg p-4 border border-[var(--theme-border)]">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="font-semibold text-[var(--theme-text-primary)]">📜 Recent Notifications</h3>
+              <div class="flex gap-2">
+                <button
+                  v-if="notificationHistory.length > 0"
+                  @click="$emit('clear-history')"
+                  class="text-xs px-2 py-1 rounded bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors"
+                  title="Clear history"
+                >
+                  🗑️
+                </button>
+                <button
+                  @click="$emit('clear-cache')"
+                  class="text-xs px-2 py-1 rounded bg-orange-500/20 text-orange-400 hover:bg-orange-500/30 transition-colors"
+                  title="Clear audio cache"
+                >
+                  💾
+                </button>
+              </div>
+            </div>
+
+            <div v-if="notificationHistory.length === 0" class="text-sm text-[var(--theme-text-secondary)] text-center py-4">
+              No notifications yet
+            </div>
+
+            <div v-else class="space-y-2 max-h-48 overflow-y-auto">
+              <div
+                v-for="record in notificationHistory"
+                :key="record.id"
+                class="flex items-center gap-2 p-2 rounded-lg bg-[var(--theme-bg-tertiary)] border border-[var(--theme-border)]"
+              >
+                <!-- Type Icon -->
+                <span class="text-lg flex-shrink-0">{{ getTypeIcon(record.type) }}</span>
+
+                <!-- Content -->
+                <div class="flex-1 min-w-0">
+                  <div class="text-xs font-semibold text-[var(--theme-text-primary)] truncate">
+                    {{ record.sourceApp }}
+                  </div>
+                  <div class="text-xs text-[var(--theme-text-secondary)] truncate">
+                    {{ record.message }}
+                  </div>
+                  <div class="text-xs text-[var(--theme-text-tertiary)]">
+                    {{ formatTime(record.timestamp) }}
+                  </div>
+                </div>
+
+                <!-- Replay Button -->
+                <button
+                  @click="$emit('replay', record)"
+                  :disabled="!settings.enabled || isSpeaking"
+                  class="p-1.5 rounded-lg transition-colors flex-shrink-0"
+                  :class="settings.enabled && !isSpeaking
+                    ? 'bg-[var(--theme-primary)]/20 text-[var(--theme-primary)] hover:bg-[var(--theme-primary)]/30'
+                    : 'bg-gray-400/20 text-gray-400 cursor-not-allowed'"
+                  title="Replay"
+                >
+                  🔄
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Cache Info -->
+          <div class="bg-[var(--theme-bg-secondary)] rounded-lg p-4 border border-[var(--theme-border)]">
+            <h3 class="font-semibold text-[var(--theme-text-primary)] mb-2">💾 Audio Cache</h3>
+            <p class="text-sm text-[var(--theme-text-secondary)]">
+              {{ cacheStats.itemCount }} project(s) cached
+            </p>
+            <p class="text-xs text-[var(--theme-text-tertiary)] mt-1">
+              Cached audio plays instantly without API calls
+            </p>
+          </div>
         </div>
 
         <!-- Footer -->
@@ -181,12 +271,14 @@
 </template>
 
 <script setup lang="ts">
-import type { VoiceSettings } from '../composables/useVoiceNotifications';
+import type { VoiceSettings, NotificationRecord } from '../composables/useVoiceNotifications';
 
 const props = defineProps<{
   isOpen: boolean;
   settings: VoiceSettings;
   isSpeaking: boolean;
+  notificationHistory: NotificationRecord[];
+  cacheStats: { itemCount: number; keys: string[] };
 }>();
 
 const emit = defineEmits<{
@@ -194,6 +286,9 @@ const emit = defineEmits<{
   'update:settings': [settings: Partial<VoiceSettings>];
   toggleEnabled: [];
   testVoice: [];
+  replay: [record: NotificationRecord];
+  'clear-history': [];
+  'clear-cache': [];
 }>();
 
 const toggleEnabled = () => {
@@ -210,6 +305,21 @@ const updateVolume = (value: string) => {
 
 const testVoice = () => {
   emit('testVoice');
+};
+
+const getTypeIcon = (type: string): string => {
+  const icons: Record<string, string> = {
+    stop: '✅',
+    error: '❌',
+    hitl: '🙋',
+    notification: '🔔',
+    summary: '📢'
+  };
+  return icons[type] || '❓';
+};
+
+const formatTime = (timestamp: number): string => {
+  return new Date(timestamp).toLocaleTimeString();
 };
 </script>
 

@@ -141,10 +141,15 @@
       :is-open="showVoiceSettings"
       :settings="voiceSettings"
       :is-speaking="isSpeaking"
+      :notification-history="notificationHistory"
+      :cache-stats="cacheStats"
       @close="showVoiceSettings = false"
       @toggle-enabled="toggleVoice"
       @update:settings="updateVoiceSettings"
       @test-voice="testVoiceNotification"
+      @replay="replayNotification"
+      @clear-history="clearVoiceHistory"
+      @clear-cache="audioCache.clearCache"
     />
 
     <!-- Toast Notifications -->
@@ -160,7 +165,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { ref, watch, computed } from 'vue';
 import type { TimeRange, HookEvent } from './types';
 import { useWebSocket } from './composables/useWebSocket';
 import { useThemes } from './composables/useThemes';
@@ -186,7 +191,24 @@ useThemes();
 const { getHexColorForApp } = useEventColors();
 
 // Voice notifications
-const { settings: voiceSettings, isConfigured: voiceConfigured, isSpeaking, toggleEnabled: toggleVoice, updateSettings: updateVoiceSettings, notifyEvent, stop: stopVoice, speak, playLocalAudio, getLocalAudio } = useVoiceNotifications();
+const {
+  settings: voiceSettings,
+  isConfigured: voiceConfigured,
+  isSpeaking,
+  toggleEnabled: toggleVoice,
+  updateSettings: updateVoiceSettings,
+  notifyEvent,
+  stop: stopVoice,
+  playLocalAudio,
+  getLocalAudio,
+  notificationHistory,
+  replayNotification,
+  clearHistory: clearVoiceHistory,
+  audioCache
+} = useVoiceNotifications();
+
+// Cache stats for UI
+const cacheStats = computed(() => audioCache.getCacheStats());
 const showVoiceSettings = ref(false);
 
 // Track last event count for new event detection
