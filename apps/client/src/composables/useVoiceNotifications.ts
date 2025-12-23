@@ -14,19 +14,19 @@ const RUSSIAN_VOICE_IDS = [
   'bIHbv24MWmeRgasZH58o'  // Will
 ];
 
-// Predefined phrases for events
-const PHRASES = {
+// Local audio files for standard phrases (no API call needed)
+const LOCAL_AUDIO = {
   en: {
-    taskComplete: 'Task completed',
-    error: 'Error occurred',
-    hitlRequest: 'Your input is needed',
-    commandFailed: 'Command failed'
+    taskComplete: '/audio/task-complete-en.mp3',
+    error: '/audio/error-en.mp3',
+    hitlRequest: '/audio/hitl-request-en.mp3',
+    commandFailed: '/audio/command-failed-en.mp3'
   },
   ru: {
-    taskComplete: 'Задача завершена',
-    error: 'Произошла ошибка',
-    hitlRequest: 'Требуется ваш ввод',
-    commandFailed: 'Команда не выполнена'
+    taskComplete: '/audio/task-complete-ru.mp3',
+    error: '/audio/error-ru.mp3',
+    hitlRequest: '/audio/hitl-request-ru.mp3',
+    commandFailed: '/audio/command-failed-ru.mp3'
   }
 };
 
@@ -182,39 +182,62 @@ export function useVoiceNotifications() {
 
   // Get current language based on voice selection
   const isRussianVoice = () => RUSSIAN_VOICE_IDS.includes(settings.value.voiceId);
-  const getPhrases = () => isRussianVoice() ? PHRASES.ru : PHRASES.en;
+  const getLocalAudio = () => isRussianVoice() ? LOCAL_AUDIO.ru : LOCAL_AUDIO.en;
+
+  // Play local audio file (instant, no API call)
+  const playLocalAudio = async (audioPath: string): Promise<void> => {
+    if (!settings.value.enabled) return;
+
+    isSpeaking.value = true;
+
+    try {
+      const audio = new Audio(audioPath);
+      audio.volume = settings.value.volume;
+      currentAudio.value = audio;
+
+      await new Promise<void>((resolve, reject) => {
+        audio.onended = () => resolve();
+        audio.onerror = () => reject(new Error('Audio playback failed'));
+        audio.play().catch(reject);
+      });
+    } catch (error) {
+      console.error('Local audio playback error:', error);
+    }
+
+    currentAudio.value = null;
+    isSpeaking.value = false;
+  };
 
   // Notify for specific event types
   const notifyEvent = (event: HookEvent) => {
     if (!settings.value.enabled) return;
 
     const eventType = event.hook_event_type;
-    const phrases = getPhrases();
+    const localAudio = getLocalAudio();
 
-    // HITL notification
+    // HITL notification (local audio)
     if (settings.value.notifyOnHITL && event.humanInTheLoop) {
-      speak(phrases.hitlRequest);
+      playLocalAudio(localAudio.hitlRequest);
       return;
     }
 
-    // Stop event (task complete)
+    // Stop event - task complete (local audio)
     if (settings.value.notifyOnStop && eventType === 'Stop') {
-      speak(phrases.taskComplete);
+      playLocalAudio(localAudio.taskComplete);
       return;
     }
 
-    // Error notification
+    // Error notification (local audio)
     if (settings.value.notifyOnError) {
       const payload = event.payload || {};
       if (payload.error || payload.exit_code !== 0) {
-        speak(phrases.error);
+        playLocalAudio(localAudio.error);
         return;
       }
     }
 
-    // Summary notification (for events with summary)
+    // Summary notification - uses API for dynamic text
     if (settings.value.notifyOnSummary && event.summary) {
-      // For summaries, use the original text (usually English from API)
       speak(event.summary);
     }
   };
@@ -226,7 +249,9 @@ export function useVoiceNotifications() {
     updateSettings,
     toggleEnabled,
     speak,
+    playLocalAudio,
     stop,
-    notifyEvent
+    notifyEvent,
+    getLocalAudio
   };
 }

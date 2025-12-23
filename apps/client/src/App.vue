@@ -186,7 +186,7 @@ useThemes();
 const { getHexColorForApp } = useEventColors();
 
 // Voice notifications
-const { settings: voiceSettings, isConfigured: voiceConfigured, isSpeaking, toggleEnabled: toggleVoice, updateSettings: updateVoiceSettings, notifyEvent, stop: stopVoice, speak } = useVoiceNotifications();
+const { settings: voiceSettings, isConfigured: voiceConfigured, isSpeaking, toggleEnabled: toggleVoice, updateSettings: updateVoiceSettings, notifyEvent, stop: stopVoice, speak, playLocalAudio, getLocalAudio } = useVoiceNotifications();
 const showVoiceSettings = ref(false);
 
 // Track last event count for new event detection
@@ -281,12 +281,9 @@ const handleThemeManagerClick = () => {
 // Russian voice IDs for language detection
 const russianVoiceIds = ['XB0fDUnXU5powFXDhCwa', 'onwK4e9ZLuTAKqWW03F9', 'N2lVS1w4EtoT3dr4eOWO', 'pFZP5JQG7iQjIQuC4Bku', 'bIHbv24MWmeRgasZH58o'];
 
-// Test voice notification with appropriate language
+// Test voice notification using local audio
 const testVoiceNotification = () => {
-  const isRussian = russianVoiceIds.includes(voiceSettings.value.voiceId);
-  const message = isRussian
-    ? 'Голосовые уведомления работают правильно'
-    : 'Voice notifications are working correctly';
-  speak(message);
+  const localAudio = getLocalAudio();
+  playLocalAudio(localAudio.taskComplete);
 };
 </script>
