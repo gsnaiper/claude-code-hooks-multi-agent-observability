@@ -144,7 +144,7 @@
       @close="showVoiceSettings = false"
       @toggle-enabled="toggleVoice"
       @update:settings="updateVoiceSettings"
-      @test-voice="speak('Voice notifications are working correctly')"
+      @test-voice="testVoiceNotification"
     />
 
     <!-- Toast Notifications -->
@@ -276,5 +276,17 @@ const handleClearClick = () => {
 const handleThemeManagerClick = () => {
   console.log('Theme manager button clicked!');
   showThemeManager.value = true;
+};
+
+// Russian voice IDs for language detection
+const russianVoiceIds = ['XB0fDUnXU5powFXDhCwa', 'onwK4e9ZLuTAKqWW03F9', 'N2lVS1w4EtoT3dr4eOWO', 'pFZP5JQG7iQjIQuC4Bku', 'bIHbv24MWmeRgasZH58o'];
+
+// Test voice notification with appropriate language
+const testVoiceNotification = () => {
+  const isRussian = russianVoiceIds.includes(voiceSettings.value.voiceId);
+  const message = isRussian
+    ? 'Голосовые уведомления работают правильно'
+    : 'Voice notifications are working correctly';
+  speak(message);
 };
 </script>

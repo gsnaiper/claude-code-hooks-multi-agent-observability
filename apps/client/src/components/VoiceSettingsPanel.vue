@@ -128,12 +128,21 @@
               @change="updateSetting('voiceId', ($event.target as HTMLSelectElement).value)"
               class="w-full p-2 rounded-lg bg-[var(--theme-bg-tertiary)] text-[var(--theme-text-primary)] border border-[var(--theme-border)]"
             >
-              <option value="21m00Tcm4TlvDq8ikWAM">Rachel (Female, EN)</option>
-              <option value="pNInz6obpgDQGcFmaJgB">Adam (Male, EN)</option>
-              <option value="TxGEqnHWrfWFTfGW9XjX">Josh (Male, EN)</option>
-              <option value="EXAVITQu4vr4xnSDxMaL">Bella (Female, EN)</option>
-              <option value="MF3mGyEYCl7XYWbV9V6O">Elli (Female, EN)</option>
-              <option value="yoZ06aMxZJJ28mfd3POQ">Sam (Male, EN)</option>
+              <optgroup label="🇷🇺 Русские голоса">
+                <option value="XB0fDUnXU5powFXDhCwa">Charlotte (Женский, RU)</option>
+                <option value="onwK4e9ZLuTAKqWW03F9">Daniel (Мужской, RU)</option>
+                <option value="N2lVS1w4EtoT3dr4eOWO">Callum (Мужской, RU)</option>
+                <option value="pFZP5JQG7iQjIQuC4Bku">Lily (Женский, RU)</option>
+                <option value="bIHbv24MWmeRgasZH58o">Will (Мужской, RU)</option>
+              </optgroup>
+              <optgroup label="🇬🇧 English Voices">
+                <option value="21m00Tcm4TlvDq8ikWAM">Rachel (Female)</option>
+                <option value="pNInz6obpgDQGcFmaJgB">Adam (Male)</option>
+                <option value="TxGEqnHWrfWFTfGW9XjX">Josh (Male)</option>
+                <option value="EXAVITQu4vr4xnSDxMaL">Bella (Female)</option>
+                <option value="MF3mGyEYCl7XYWbV9V6O">Elli (Female)</option>
+                <option value="yoZ06aMxZJJ28mfd3POQ">Sam (Male)</option>
+              </optgroup>
             </select>
           </div>
 
