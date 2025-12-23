@@ -59,6 +59,19 @@
           >
             <span class="text-2xl mobile:text-base">🎨</span>
           </button>
+
+          <!-- Voice Notifications Toggle -->
+          <button
+            v-if="voiceConfigured"
+            @click="isSpeaking ? stopVoice() : toggleVoice()"
+            class="p-3 mobile:p-1 rounded-lg transition-all duration-200 border backdrop-blur-sm shadow-lg hover:shadow-xl"
+            :class="voiceSettings.enabled
+              ? (isSpeaking ? 'bg-green-500/40 border-green-400 animate-pulse' : 'bg-green-500/30 border-green-400 hover:bg-green-500/40')
+              : 'bg-white/20 border-white/30 hover:bg-white/30 hover:border-white/50'"
+            :title="voiceSettings.enabled ? (isSpeaking ? 'Stop speaking' : 'Voice ON - click to disable') : 'Enable voice notifications'"
+          >
+            <span class="text-2xl mobile:text-base">{{ isSpeaking ? '🔊' : (voiceSettings.enabled ? '🔔' : '🔕') }}</span>
+          </button>
         </div>
       </div>
     </header>
@@ -137,10 +150,11 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import type { TimeRange } from './types';
+import type { TimeRange, HookEvent } from './types';
 import { useWebSocket } from './composables/useWebSocket';
 import { useThemes } from './composables/useThemes';
 import { useEventColors } from './composables/useEventColors';
+import { useVoiceNotifications } from './composables/useVoiceNotifications';
 import EventTimeline from './components/EventTimeline.vue';
 import FilterPanel from './components/FilterPanel.vue';
 import StickScrollButton from './components/StickScrollButton.vue';
@@ -158,6 +172,24 @@ useThemes();
 
 // Event colors
 const { getHexColorForApp } = useEventColors();
+
+// Voice notifications
+const { settings: voiceSettings, isConfigured: voiceConfigured, isSpeaking, toggleEnabled: toggleVoice, notifyEvent, stop: stopVoice } = useVoiceNotifications();
+
+// Track last event count for new event detection
+let lastEventCount = 0;
+
+// Watch for new events and trigger voice notifications
+watch(events, (newEvents) => {
+  if (newEvents.length > lastEventCount) {
+    // Process only new events
+    const newEventsList = newEvents.slice(lastEventCount);
+    newEventsList.forEach((event: HookEvent) => {
+      notifyEvent(event);
+    });
+  }
+  lastEventCount = newEvents.length;
+}, { deep: true });
 
 // Filters
 const filters = ref({
