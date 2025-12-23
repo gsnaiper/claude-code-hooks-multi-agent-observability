@@ -54,6 +54,20 @@ kill_port() {
 kill_port $SERVER_PORT "server"
 kill_port $CLIENT_PORT "client"
 
+# Ensure server dependencies are installed
+if [ ! -d "$PROJECT_ROOT/apps/server/node_modules" ]; then
+    echo -e "\n${YELLOW}Installing server dependencies...${NC}"
+    cd "$PROJECT_ROOT/apps/server" && bun install
+    echo -e "${GREEN}✅ Server dependencies installed${NC}"
+fi
+
+# Ensure client dependencies are installed
+if [ ! -d "$PROJECT_ROOT/apps/client/node_modules" ]; then
+    echo -e "\n${YELLOW}Installing client dependencies...${NC}"
+    cd "$PROJECT_ROOT/apps/client" && bun install
+    echo -e "${GREEN}✅ Client dependencies installed${NC}"
+fi
+
 # Start server
 echo -e "\n${GREEN}Starting server on port $SERVER_PORT...${NC}"
 cd "$PROJECT_ROOT/apps/server"

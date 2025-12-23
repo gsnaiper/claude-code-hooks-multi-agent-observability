@@ -18,9 +18,38 @@ import os
 import argparse
 import urllib.request
 import urllib.error
+import subprocess
 from datetime import datetime
 from utils.summarizer import generate_event_summary
 from utils.model_extractor import get_model_from_transcript
+
+def is_wsl():
+    """Detect if running in WSL."""
+    try:
+        with open('/proc/version', 'r') as f:
+            return 'microsoft' in f.read().lower()
+    except:
+        return False
+
+def send_via_powershell(event_data, server_url):
+    """Send event using PowerShell (for WSL-to-Windows connectivity)."""
+    try:
+        import base64
+        json_body = json.dumps(event_data)
+        # Encode as UTF-16LE Base64 for PowerShell -EncodedCommand
+        ps_script = f"""
+$body = @'
+{json_body}
+'@
+Invoke-RestMethod -Method Post -Uri '{server_url}' -ContentType 'application/json' -Body $body
+"""
+        encoded = base64.b64encode(ps_script.encode('utf-16-le')).decode('ascii')
+        cmd = ['powershell.exe', '-EncodedCommand', encoded]
+        result = subprocess.run(cmd, capture_output=True, timeout=10)
+        return result.returncode == 0
+    except Exception as e:
+        print(f"PowerShell fallback failed: {e}", file=sys.stderr)
+        return False
 
 def send_event_to_server(event_data, server_url='http://localhost:4000/events'):
     """Send event data to the observability server."""
@@ -44,6 +73,9 @@ def send_event_to_server(event_data, server_url='http://localhost:4000/events'):
                 return False
                 
     except urllib.error.URLError as e:
+        # WSL-to-Windows fallback: use PowerShell if urllib fails
+        if is_wsl():
+            return send_via_powershell(event_data, server_url)
         print(f"Failed to send event: {e}", file=sys.stderr)
         return False
     except Exception as e:
