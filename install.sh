@@ -180,13 +180,16 @@ install_server() {
     # Install server dependencies
     log_info "Installing server dependencies..."
     cd "$INSTALL_DIR/observability/server"
-    bun install --silent
+    # Remove old lockfile to avoid WSL file system issues
+    rm -f bun.lockb 2>/dev/null || true
+    bun install --no-save 2>/dev/null || bun install
 
     # Install and build client
     log_info "Building client dashboard..."
     cd "$INSTALL_DIR/observability/client"
-    bun install --silent
-    bun run build --silent 2>/dev/null || log_warn "Client build skipped (dev mode)"
+    rm -f bun.lockb 2>/dev/null || true
+    bun install --no-save 2>/dev/null || bun install
+    bun run build 2>/dev/null || log_warn "Client build skipped (dev mode)"
 
     log_info "Server installed"
 }
