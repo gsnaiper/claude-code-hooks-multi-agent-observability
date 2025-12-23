@@ -63,12 +63,12 @@
           <!-- Voice Notifications Toggle -->
           <button
             v-if="voiceConfigured"
-            @click="isSpeaking ? stopVoice() : toggleVoice()"
+            @click="isSpeaking ? stopVoice() : showVoiceSettings = true"
             class="p-3 mobile:p-1 rounded-lg transition-all duration-200 border backdrop-blur-sm shadow-lg hover:shadow-xl"
             :class="voiceSettings.enabled
               ? (isSpeaking ? 'bg-green-500/40 border-green-400 animate-pulse' : 'bg-green-500/30 border-green-400 hover:bg-green-500/40')
               : 'bg-white/20 border-white/30 hover:bg-white/30 hover:border-white/50'"
-            :title="voiceSettings.enabled ? (isSpeaking ? 'Stop speaking' : 'Voice ON - click to disable') : 'Enable voice notifications'"
+            :title="isSpeaking ? 'Stop speaking' : 'Voice settings'"
           >
             <span class="text-2xl mobile:text-base">{{ isSpeaking ? '🔊' : (voiceSettings.enabled ? '🔔' : '🔕') }}</span>
           </button>
@@ -136,6 +136,17 @@
       @close="showThemeManager = false"
     />
 
+    <!-- Voice Settings Panel -->
+    <VoiceSettingsPanel
+      :is-open="showVoiceSettings"
+      :settings="voiceSettings"
+      :is-speaking="isSpeaking"
+      @close="showVoiceSettings = false"
+      @toggle-enabled="toggleVoice"
+      @update:settings="updateVoiceSettings"
+      @test-voice="speak('Voice notifications are working correctly')"
+    />
+
     <!-- Toast Notifications -->
     <ToastNotification
       v-for="(toast, index) in toasts"
@@ -162,6 +173,7 @@ import LivePulseChart from './components/LivePulseChart.vue';
 import ThemeManager from './components/ThemeManager.vue';
 import ToastNotification from './components/ToastNotification.vue';
 import AgentSwimLaneContainer from './components/AgentSwimLaneContainer.vue';
+import VoiceSettingsPanel from './components/VoiceSettingsPanel.vue';
 import { WS_URL } from './config';
 
 // WebSocket connection
@@ -174,7 +186,8 @@ useThemes();
 const { getHexColorForApp } = useEventColors();
 
 // Voice notifications
-const { settings: voiceSettings, isConfigured: voiceConfigured, isSpeaking, toggleEnabled: toggleVoice, notifyEvent, stop: stopVoice } = useVoiceNotifications();
+const { settings: voiceSettings, isConfigured: voiceConfigured, isSpeaking, toggleEnabled: toggleVoice, updateSettings: updateVoiceSettings, notifyEvent, stop: stopVoice, speak } = useVoiceNotifications();
+const showVoiceSettings = ref(false);
 
 // Track last event count for new event detection
 let lastEventCount = 0;
