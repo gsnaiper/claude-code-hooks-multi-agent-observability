@@ -5,14 +5,26 @@
 #     "openai",
 #     "openai[voice_helpers]",
 #     "python-dotenv",
+#     "redis",
 # ]
 # ///
 
 import os
 import sys
 import asyncio
+import io
+import tempfile
 from pathlib import Path
 from dotenv import load_dotenv
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+try:
+    from utils.redis_cache import get_hook_cache
+    CACHE_AVAILABLE = True
+except ImportError:
+    CACHE_AVAILABLE = False
 
 
 async def main():
@@ -61,20 +73,85 @@ async def main():
             text = "Today is a wonderful day to build something people love!"
 
         print(f"🎯 Text: {text}")
-        print("🔊 Generating and streaming...")
+
+        voice = "nova"
+        audio_bytes = None
+        cache_hit = False
+
+        # Check cache first
+        if CACHE_AVAILABLE:
+            cache = get_hook_cache()
+            cached_audio = cache.get_cached_audio(text, f"openai-{voice}")
+            if cached_audio:
+                print("📦 Cache hit! Playing cached audio...")
+                audio_bytes = cached_audio
+                cache_hit = True
 
         try:
-            # Generate and stream audio using OpenAI TTS
-            async with openai.audio.speech.with_streaming_response.create(
-                model="gpt-4o-mini-tts",
-                voice="nova",
-                input=text,
-                instructions="Speak in a cheerful, positive yet professional tone.",
-                response_format="mp3",
-            ) as response:
-                await LocalAudioPlayer().play(response)
+            if audio_bytes:
+                # Play cached audio using temp file
+                with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
+                    f.write(audio_bytes)
+                    temp_path = f.name
+                try:
+                    import subprocess
+                    # Use ffplay or similar to play the audio
+                    subprocess.run(['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', temp_path],
+                                   capture_output=True, timeout=30)
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    # Fallback: try mpv
+                    try:
+                        subprocess.run(['mpv', '--no-video', temp_path],
+                                       capture_output=True, timeout=30)
+                    except (FileNotFoundError, subprocess.TimeoutExpired):
+                        print("⚠️ Could not play cached audio (no player found)")
+                finally:
+                    os.unlink(temp_path)
+            else:
+                print("🔊 Generating audio...")
+                # Generate audio using OpenAI TTS (non-streaming for caching)
+                response = await openai.audio.speech.create(
+                    model="gpt-4o-mini-tts",
+                    voice=voice,
+                    input=text,
+                    instructions="Speak in a cheerful, positive yet professional tone.",
+                    response_format="mp3",
+                )
+                audio_bytes = response.content
 
-            print("✅ Playback complete!")
+                # Cache the audio for future use
+                if CACHE_AVAILABLE and audio_bytes:
+                    cache = get_hook_cache()
+                    if cache.cache_audio(text, audio_bytes, f"openai-{voice}"):
+                        print("💾 Audio cached for future use")
+
+                # Play the generated audio via temp file
+                with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
+                    f.write(audio_bytes)
+                    temp_path = f.name
+                try:
+                    import subprocess
+                    subprocess.run(['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', temp_path],
+                                   capture_output=True, timeout=30)
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    try:
+                        subprocess.run(['mpv', '--no-video', temp_path],
+                                       capture_output=True, timeout=30)
+                    except (FileNotFoundError, subprocess.TimeoutExpired):
+                        # Last resort: try LocalAudioPlayer with streaming
+                        async with openai.audio.speech.with_streaming_response.create(
+                            model="gpt-4o-mini-tts",
+                            voice=voice,
+                            input=text,
+                            instructions="Speak in a cheerful, positive yet professional tone.",
+                            response_format="mp3",
+                        ) as stream_response:
+                            await LocalAudioPlayer().play(stream_response)
+                finally:
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
+
+            print("✅ Playback complete!" + (" (from cache)" if cache_hit else ""))
 
         except Exception as e:
             print(f"❌ Error: {e}")

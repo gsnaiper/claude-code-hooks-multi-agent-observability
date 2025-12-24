@@ -4,13 +4,29 @@
 # dependencies = [
 #     "elevenlabs",
 #     "python-dotenv",
+#     "redis",
 # ]
 # ///
 
 import os
 import sys
+import io
 from pathlib import Path
 from dotenv import load_dotenv
+
+# Add parent directory to path for imports
+HOOKS_DIR = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(HOOKS_DIR))
+
+# Load .env from project root (two levels up from .claude/hooks)
+PROJECT_ROOT = HOOKS_DIR.parent.parent
+load_dotenv(PROJECT_ROOT / '.env')
+
+try:
+    from utils.redis_cache import get_hook_cache
+    CACHE_AVAILABLE = True
+except ImportError:
+    CACHE_AVAILABLE = False
 
 def main():
     """
@@ -62,16 +78,41 @@ def main():
         print("🔊 Generating and playing...")
 
         try:
-            # Generate and play audio directly
-            audio = elevenlabs.text_to_speech.convert(
-                text=text,
-                voice_id="WejK3H1m7MI9CHnIjW9K",  # Specified voice
-                model_id="eleven_flash_v2_5",
-                output_format="mp3_44100_128",
-            )
+            # Get voice ID from environment or use default (Rachel)
+            voice_id = os.getenv('ELEVENLABS_VOICE_ID', '21m00Tcm4TlvDq8ikWAM')
+            audio_bytes = None
+            cache_hit = False
 
-            play(audio)
-            print("✅ Playback complete!")
+            # Check cache first
+            if CACHE_AVAILABLE:
+                cache = get_hook_cache()
+                cached_audio = cache.get_cached_audio(text, voice_id)
+                if cached_audio:
+                    print("📦 Cache hit! Playing cached audio...")
+                    audio_bytes = cached_audio
+                    cache_hit = True
+
+            # Generate audio if not cached
+            if not audio_bytes:
+                print("🔊 Generating audio...")
+                audio_generator = elevenlabs.text_to_speech.convert(
+                    text=text,
+                    voice_id=voice_id,
+                    model_id="eleven_flash_v2_5",
+                    output_format="mp3_44100_128",
+                )
+                # Collect all bytes from generator
+                audio_bytes = b''.join(audio_generator)
+
+                # Cache the audio for future use
+                if CACHE_AVAILABLE and audio_bytes:
+                    cache = get_hook_cache()
+                    if cache.cache_audio(text, audio_bytes, voice_id):
+                        print("💾 Audio cached for future use")
+
+            # Play the audio
+            play(io.BytesIO(audio_bytes))
+            print("✅ Playback complete!" + (" (from cache)" if cache_hit else ""))
 
         except Exception as e:
             print(f"❌ Error: {e}")

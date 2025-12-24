@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  # Redis for hook caching, deduplication, and event queuing
+  # TODO: Switch to DHI after auth: dhi.io/redis:7-debian13
+  redis:
+    image: redis:7-alpine
+    container_name: claude-hooks-redis
+    ports:
+      - "6380:6379"
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # Observability server (optional, for development)
+  # server:
+  #   build:
+  #     context: ./apps/server
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "4000:4000"
+  #   environment:
+  #     - REDIS_HOST=redis
+  #     - REDIS_PORT=6379
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+
+volumes:
+  redis_data:
+    driver: local
