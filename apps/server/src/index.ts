@@ -1,5 +1,27 @@
-import { initDatabase, insertEvent, getFilterOptions, getRecentEvents, updateEventHITLResponse, insertAudioCache, getAudioCacheByKey, getAudioCacheStats, deleteOldAudioCache } from './db';
-import type { HookEvent, HumanInTheLoopResponse } from './types';
+import {
+  initDatabase,
+  insertEvent,
+  getFilterOptions,
+  getRecentEvents,
+  updateEventHITLResponse,
+  insertAudioCache,
+  getAudioCacheByKey,
+  getAudioCacheStats,
+  deleteOldAudioCache,
+  // Project management
+  getProject,
+  insertProject,
+  updateProject,
+  listProjects,
+  archiveProject,
+  getSession,
+  listProjectSessions,
+  ensureProjectExists,
+  ensureSessionExists,
+  updateProjectActivity,
+  incrementSessionCounts
+} from './db';
+import type { HookEvent, HumanInTheLoopResponse, Project, ProjectSearchQuery } from './types';
 import { 
   createTheme, 
   updateThemeById, 
@@ -145,8 +167,21 @@ const server = Bun.serve({
           });
         }
         
+        // Auto-register project and session
+        const projectId = event.source_app || 'orphaned:unknown';
+        const project = ensureProjectExists(projectId);
+        const session = ensureSessionExists(projectId, event.session_id, event.model_name);
+
+        // Add project_id to event
+        const eventWithProject = { ...event, project_id: projectId };
+
         // Insert event into database
-        const savedEvent = insertEvent(event);
+        const savedEvent = insertEvent(eventWithProject);
+
+        // Update counts and activity
+        const isToolCall = event.hook_event_type.includes('ToolUse');
+        incrementSessionCounts(session.id, 1, isToolCall ? 1 : 0);
+        updateProjectActivity(projectId, event.session_id);
         
         // Broadcast to all WebSocket clients
         const message = JSON.stringify({ type: 'event', data: savedEvent });
@@ -547,6 +582,263 @@ const server = Bun.serve({
         success: true,
         data: { deleted },
         message: `Deleted ${deleted} old audio entries`
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // ============= PROJECT API =============
+
+    // GET /api/projects - List all projects
+    if (url.pathname === '/api/projects' && req.method === 'GET') {
+      const query: ProjectSearchQuery = {
+        status: url.searchParams.get('status') as any || undefined,
+        query: url.searchParams.get('query') || undefined,
+        sortBy: url.searchParams.get('sortBy') as any || undefined,
+        sortOrder: url.searchParams.get('sortOrder') as any || undefined,
+        limit: url.searchParams.get('limit') ? parseInt(url.searchParams.get('limit')!) : undefined,
+        offset: url.searchParams.get('offset') ? parseInt(url.searchParams.get('offset')!) : undefined,
+      };
+
+      const projects = listProjects(query);
+      return new Response(JSON.stringify({
+        success: true,
+        data: projects
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // GET /api/projects/:id - Get project details
+    if (url.pathname.match(/^\/api\/projects\/[^\/]+$/) && req.method === 'GET' && !url.pathname.includes('/sessions')) {
+      const pathParts = url.pathname.split('/');
+      const id = pathParts[3] ? decodeURIComponent(pathParts[3]) : '';
+      if (!id) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Project ID is required'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      const project = getProject(id);
+      if (!project) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Project not found'
+        }), {
+          status: 404,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      return new Response(JSON.stringify({
+        success: true,
+        data: project
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // POST /api/projects - Create project (manual)
+    if (url.pathname === '/api/projects' && req.method === 'POST') {
+      try {
+        const body = await req.json() as { id?: string; displayName?: string; description?: string; gitRemoteUrl?: string; localPath?: string; status?: string; metadata?: Record<string, unknown> };
+
+        if (!body.id) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Project ID is required'
+          }), {
+            status: 400,
+            headers: { ...headers, 'Content-Type': 'application/json' }
+          });
+        }
+
+        // Check if already exists
+        const existing = getProject(body.id);
+        if (existing) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Project already exists'
+          }), {
+            status: 409,
+            headers: { ...headers, 'Content-Type': 'application/json' }
+          });
+        }
+
+        const project = insertProject({
+          id: body.id,
+          displayName: body.displayName,
+          description: body.description,
+          gitRemoteUrl: body.gitRemoteUrl,
+          localPath: body.localPath,
+          status: (body.status as 'active' | 'archived' | 'paused') || 'active',
+          metadata: body.metadata
+        });
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: project
+        }), {
+          status: 201,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('Error creating project:', error);
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Invalid request body'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // PUT /api/projects/:id - Update project
+    if (url.pathname.match(/^\/api\/projects\/[^\/]+$/) && req.method === 'PUT') {
+      const pathParts = url.pathname.split('/');
+      const id = pathParts[3] ? decodeURIComponent(pathParts[3]) : '';
+      if (!id) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Project ID is required'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      try {
+        const updates = await req.json() as Partial<Project>;
+        const project = updateProject(id, updates);
+
+        if (!project) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Project not found'
+          }), {
+            status: 404,
+            headers: { ...headers, 'Content-Type': 'application/json' }
+          });
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: project
+        }), {
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('Error updating project:', error);
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Invalid request body'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // DELETE /api/projects/:id - Archive project
+    if (url.pathname.match(/^\/api\/projects\/[^\/]+$/) && req.method === 'DELETE') {
+      const pathParts = url.pathname.split('/');
+      const id = pathParts[3] ? decodeURIComponent(pathParts[3]) : '';
+      if (!id) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Project ID is required'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      const success = archiveProject(id);
+      if (!success) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Project not found'
+        }), {
+          status: 404,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      return new Response(JSON.stringify({
+        success: true,
+        message: 'Project archived'
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // GET /api/projects/:id/sessions - List project sessions
+    if (url.pathname.match(/^\/api\/projects\/[^\/]+\/sessions$/) && req.method === 'GET') {
+      const pathParts = url.pathname.split('/');
+      const id = pathParts[3] ? decodeURIComponent(pathParts[3]) : '';
+      if (!id) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Project ID is required'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      const project = getProject(id);
+      if (!project) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Project not found'
+        }), {
+          status: 404,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      const sessions = listProjectSessions(id);
+      return new Response(JSON.stringify({
+        success: true,
+        data: sessions
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // GET /api/sessions/:id - Get session details
+    if (url.pathname.match(/^\/api\/sessions\/[^\/]+$/) && req.method === 'GET') {
+      const pathParts = url.pathname.split('/');
+      const id = pathParts[3] ? decodeURIComponent(pathParts[3]) : '';
+      if (!id) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Session ID is required'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      const session = getSession(id);
+      if (!session) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Session not found'
+        }), {
+          status: 404,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      return new Response(JSON.stringify({
+        success: true,
+        data: session
       }), {
         headers: { ...headers, 'Content-Type': 'application/json' }
       });

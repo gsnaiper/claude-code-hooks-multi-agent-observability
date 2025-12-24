@@ -40,6 +40,7 @@ export interface HookEvent {
   timestamp?: number;
   model_name?: string;
   model?: string;
+  project_id?: string;
 
   // Tool information
   tool_name?: string;
@@ -86,4 +87,40 @@ export interface ChartConfig {
     axis: string;
     text: string;
   };
+}
+
+// Project Management interfaces
+export interface Project {
+  id: string;                    // group:project format
+  displayName?: string;
+  description?: string;
+  gitRemoteUrl?: string;
+  localPath?: string;
+  createdAt: number;
+  updatedAt: number;
+  lastSessionId?: string;
+  lastActivityAt?: number;
+  status: 'active' | 'archived' | 'paused';
+  metadata?: Record<string, unknown>;
+}
+
+export interface ProjectSession {
+  id: string;                    // full session UUID
+  projectId: string;
+  startedAt: number;
+  endedAt?: number;
+  status: 'active' | 'completed' | 'abandoned';
+  modelName?: string;
+  eventCount: number;
+  toolCallCount: number;
+  notes?: string;
+}
+
+export interface ProjectSearchQuery {
+  status?: 'active' | 'archived' | 'paused';
+  query?: string;
+  sortBy?: 'name' | 'created' | 'updated' | 'lastActivity';
+  sortOrder?: 'asc' | 'desc';
+  limit?: number;
+  offset?: number;
 }

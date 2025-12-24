@@ -39,6 +39,7 @@ export interface HookEvent {
   summary?: string;
   timestamp?: number;
   model_name?: string;
+  project_id?: string;
 
   // NEW: Optional HITL data
   humanInTheLoop?: HumanInTheLoop;
@@ -139,4 +140,40 @@ export interface ApiResponse<T = any> {
   error?: string;
   message?: string;
   validationErrors?: ThemeValidationError[];
+}
+
+// Project Management interfaces
+export interface Project {
+  id: string;                    // group:project format
+  displayName?: string;
+  description?: string;
+  gitRemoteUrl?: string;
+  localPath?: string;
+  createdAt: number;
+  updatedAt: number;
+  lastSessionId?: string;
+  lastActivityAt?: number;
+  status: 'active' | 'archived' | 'paused';
+  metadata?: Record<string, unknown>;
+}
+
+export interface ProjectSession {
+  id: string;                    // full session UUID
+  projectId: string;
+  startedAt: number;
+  endedAt?: number;
+  status: 'active' | 'completed' | 'abandoned';
+  modelName?: string;
+  eventCount: number;
+  toolCallCount: number;
+  notes?: string;
+}
+
+export interface ProjectSearchQuery {
+  status?: 'active' | 'archived' | 'paused';
+  query?: string;
+  sortBy?: 'name' | 'created' | 'updated' | 'lastActivity';
+  sortOrder?: 'asc' | 'desc';
+  limit?: number;
+  offset?: number;
 }

@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite';
-import type { HookEvent, FilterOptions, Theme, ThemeSearchQuery } from './types';
+import type { HookEvent, FilterOptions, Theme, ThemeSearchQuery, Project, ProjectSession, ProjectSearchQuery } from './types';
 
 let db: Database;
 
@@ -141,12 +141,61 @@ export function initDatabase(): void {
   db.exec('CREATE INDEX IF NOT EXISTS idx_audio_cache_key ON audio_cache(key)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_audio_cache_source_app ON audio_cache(source_app)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_audio_cache_created_at ON audio_cache(created_at)');
+
+  // Create projects table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      display_name TEXT,
+      description TEXT,
+      git_remote_url TEXT,
+      local_path TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      last_session_id TEXT,
+      last_activity_at INTEGER,
+      status TEXT DEFAULT 'active',
+      metadata TEXT
+    )
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_projects_last_activity ON projects(last_activity_at DESC)');
+
+  // Create project_sessions table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS project_sessions (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      ended_at INTEGER,
+      status TEXT DEFAULT 'active',
+      model_name TEXT,
+      event_count INTEGER DEFAULT 0,
+      tool_call_count INTEGER DEFAULT 0,
+      notes TEXT,
+      FOREIGN KEY (project_id) REFERENCES projects(id)
+    )
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_project ON project_sessions(project_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_started ON project_sessions(started_at DESC)');
+
+  // Add project_id column to events table (migration)
+  try {
+    const eventColumns = db.prepare("PRAGMA table_info(events)").all() as any[];
+    const hasProjectIdColumn = eventColumns.some((col: any) => col.name === 'project_id');
+    if (!hasProjectIdColumn) {
+      db.exec('ALTER TABLE events ADD COLUMN project_id TEXT');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_id)');
+    }
+  } catch (error) {
+    // Column might already exist
+  }
 }
 
 export function insertEvent(event: HookEvent): HookEvent {
   const stmt = db.prepare(`
-    INSERT INTO events (source_app, session_id, hook_event_type, payload, chat, summary, timestamp, humanInTheLoop, humanInTheLoopStatus, model_name)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO events (source_app, session_id, hook_event_type, payload, chat, summary, timestamp, humanInTheLoop, humanInTheLoopStatus, model_name, project_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const timestamp = event.timestamp || Date.now();
@@ -167,14 +216,16 @@ export function insertEvent(event: HookEvent): HookEvent {
     timestamp,
     event.humanInTheLoop ? JSON.stringify(event.humanInTheLoop) : null,
     humanInTheLoopStatus ? JSON.stringify(humanInTheLoopStatus) : null,
-    event.model_name || null
+    event.model_name || null,
+    event.project_id || null
   );
 
   return {
     ...event,
     id: result.lastInsertRowid as number,
     timestamp,
-    humanInTheLoopStatus
+    humanInTheLoopStatus,
+    project_id: event.project_id
   };
 }
 
@@ -192,7 +243,7 @@ export function getFilterOptions(): FilterOptions {
 
 export function getRecentEvents(limit: number = 300): HookEvent[] {
   const stmt = db.prepare(`
-    SELECT id, source_app, session_id, hook_event_type, payload, chat, summary, timestamp, humanInTheLoop, humanInTheLoopStatus, model_name
+    SELECT id, source_app, session_id, hook_event_type, payload, chat, summary, timestamp, humanInTheLoop, humanInTheLoopStatus, model_name, project_id
     FROM events
     ORDER BY timestamp DESC
     LIMIT ?
@@ -211,7 +262,8 @@ export function getRecentEvents(limit: number = 300): HookEvent[] {
     timestamp: row.timestamp,
     humanInTheLoop: row.humanInTheLoop ? JSON.parse(row.humanInTheLoop) : undefined,
     humanInTheLoopStatus: row.humanInTheLoopStatus ? JSON.parse(row.humanInTheLoopStatus) : undefined,
-    model_name: row.model_name || undefined
+    model_name: row.model_name || undefined,
+    project_id: row.project_id || undefined
   })).reverse();
 }
 
@@ -382,7 +434,7 @@ export function updateEventHITLResponse(id: number, response: any): HookEvent | 
   stmt.run(JSON.stringify(status), id);
 
   const selectStmt = db.prepare(`
-    SELECT id, source_app, session_id, hook_event_type, payload, chat, summary, timestamp, humanInTheLoop, humanInTheLoopStatus, model_name
+    SELECT id, source_app, session_id, hook_event_type, payload, chat, summary, timestamp, humanInTheLoop, humanInTheLoopStatus, model_name, project_id
     FROM events
     WHERE id = ?
   `);
@@ -401,7 +453,8 @@ export function updateEventHITLResponse(id: number, response: any): HookEvent | 
     timestamp: row.timestamp,
     humanInTheLoop: row.humanInTheLoop ? JSON.parse(row.humanInTheLoop) : undefined,
     humanInTheLoopStatus: row.humanInTheLoopStatus ? JSON.parse(row.humanInTheLoopStatus) : undefined,
-    model_name: row.model_name || undefined
+    model_name: row.model_name || undefined,
+    project_id: row.project_id || undefined
   };
 }
 
@@ -498,6 +551,323 @@ export function deleteOldAudioCache(olderThanMs: number = 7 * 24 * 60 * 60 * 100
   const cutoff = Date.now() - olderThanMs;
   const result = db.prepare('DELETE FROM audio_cache WHERE accessed_at < ?').run(cutoff);
   return result.changes;
+}
+
+// Project CRUD functions
+export function getProject(id: string): Project | null {
+  const stmt = db.prepare('SELECT * FROM projects WHERE id = ?');
+  const row = stmt.get(id) as any;
+
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    displayName: row.display_name,
+    description: row.description,
+    gitRemoteUrl: row.git_remote_url,
+    localPath: row.local_path,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastSessionId: row.last_session_id,
+    lastActivityAt: row.last_activity_at,
+    status: row.status,
+    metadata: row.metadata ? JSON.parse(row.metadata) : undefined
+  };
+}
+
+export function insertProject(project: Omit<Project, 'createdAt' | 'updatedAt'>): Project {
+  const now = Date.now();
+
+  const stmt = db.prepare(`
+    INSERT INTO projects (id, display_name, description, git_remote_url, local_path, created_at, updated_at, last_session_id, last_activity_at, status, metadata)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  stmt.run(
+    project.id,
+    project.displayName || null,
+    project.description || null,
+    project.gitRemoteUrl || null,
+    project.localPath || null,
+    now,
+    now,
+    project.lastSessionId || null,
+    project.lastActivityAt || null,
+    project.status || 'active',
+    project.metadata ? JSON.stringify(project.metadata) : null
+  );
+
+  return {
+    ...project,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+export function updateProject(id: string, updates: Partial<Project>): Project | null {
+  const now = Date.now();
+
+  // Validate status if provided
+  const validProjectStatuses = ['active', 'archived', 'paused'];
+  if (updates.status && !validProjectStatuses.includes(updates.status)) {
+    throw new Error(`Invalid project status: ${updates.status}`);
+  }
+
+  const project = getProject(id);
+  if (!project) return null;
+
+  const updatedProject = { ...project, ...updates, updatedAt: now };
+
+  const stmt = db.prepare(`
+    UPDATE projects SET
+      display_name = ?,
+      description = ?,
+      git_remote_url = ?,
+      local_path = ?,
+      updated_at = ?,
+      last_session_id = ?,
+      last_activity_at = ?,
+      status = ?,
+      metadata = ?
+    WHERE id = ?
+  `);
+
+  stmt.run(
+    updatedProject.displayName || null,
+    updatedProject.description || null,
+    updatedProject.gitRemoteUrl || null,
+    updatedProject.localPath || null,
+    now,
+    updatedProject.lastSessionId || null,
+    updatedProject.lastActivityAt || null,
+    updatedProject.status,
+    updatedProject.metadata ? JSON.stringify(updatedProject.metadata) : null,
+    id
+  );
+
+  return updatedProject;
+}
+
+export function listProjects(query: ProjectSearchQuery = {}): Project[] {
+  let sql = 'SELECT * FROM projects WHERE 1=1';
+  const params: any[] = [];
+
+  if (query.status) {
+    sql += ' AND status = ?';
+    params.push(query.status);
+  }
+
+  if (query.query) {
+    sql += ' AND (id LIKE ? OR display_name LIKE ? OR description LIKE ?)';
+    const searchTerm = `%${query.query}%`;
+    params.push(searchTerm, searchTerm, searchTerm);
+  }
+
+  const sortBy = query.sortBy || 'lastActivity';
+  const sortOrder = query.sortOrder || 'desc';
+  const sortColumn = {
+    name: 'display_name',
+    created: 'created_at',
+    updated: 'updated_at',
+    lastActivity: 'last_activity_at'
+  }[sortBy] || 'last_activity_at';
+
+  // SQLite doesn't support NULLS LAST - use CASE to put NULLs at end
+  const sortDir = sortOrder.toUpperCase();
+  sql += ` ORDER BY CASE WHEN ${sortColumn} IS NULL THEN 1 ELSE 0 END, ${sortColumn} ${sortDir}`;
+
+  if (query.limit) {
+    sql += ' LIMIT ?';
+    params.push(query.limit);
+    if (query.offset) {
+      sql += ' OFFSET ?';
+      params.push(query.offset);
+    }
+  }
+
+  const stmt = db.prepare(sql);
+  const rows = stmt.all(...params) as any[];
+
+  return rows.map(row => ({
+    id: row.id,
+    displayName: row.display_name,
+    description: row.description,
+    gitRemoteUrl: row.git_remote_url,
+    localPath: row.local_path,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastSessionId: row.last_session_id,
+    lastActivityAt: row.last_activity_at,
+    status: row.status,
+    metadata: row.metadata ? JSON.parse(row.metadata) : undefined
+  }));
+}
+
+export function archiveProject(id: string): boolean {
+  const stmt = db.prepare('UPDATE projects SET status = ?, updated_at = ? WHERE id = ?');
+  const result = stmt.run('archived', Date.now(), id);
+  return result.changes > 0;
+}
+
+// Project Session functions
+export function getSession(id: string): ProjectSession | null {
+  const stmt = db.prepare('SELECT * FROM project_sessions WHERE id = ?');
+  const row = stmt.get(id) as any;
+
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    status: row.status,
+    modelName: row.model_name,
+    eventCount: row.event_count,
+    toolCallCount: row.tool_call_count,
+    notes: row.notes
+  };
+}
+
+export function insertSession(session: Omit<ProjectSession, 'eventCount' | 'toolCallCount'>): ProjectSession {
+  const stmt = db.prepare(`
+    INSERT INTO project_sessions (id, project_id, started_at, ended_at, status, model_name, event_count, tool_call_count, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  stmt.run(
+    session.id,
+    session.projectId,
+    session.startedAt,
+    session.endedAt || null,
+    session.status || 'active',
+    session.modelName || null,
+    0,
+    0,
+    session.notes || null
+  );
+
+  return {
+    ...session,
+    eventCount: 0,
+    toolCallCount: 0
+  };
+}
+
+export function updateSession(id: string, updates: Partial<ProjectSession>): ProjectSession | null {
+  // Validate status if provided
+  const validSessionStatuses = ['active', 'completed', 'abandoned'];
+  if (updates.status && !validSessionStatuses.includes(updates.status)) {
+    throw new Error(`Invalid session status: ${updates.status}`);
+  }
+
+  const session = getSession(id);
+  if (!session) return null;
+
+  const updatedSession = { ...session, ...updates };
+
+  const stmt = db.prepare(`
+    UPDATE project_sessions SET
+      ended_at = ?,
+      status = ?,
+      model_name = ?,
+      event_count = ?,
+      tool_call_count = ?,
+      notes = ?
+    WHERE id = ?
+  `);
+
+  stmt.run(
+    updatedSession.endedAt || null,
+    updatedSession.status,
+    updatedSession.modelName || null,
+    updatedSession.eventCount,
+    updatedSession.toolCallCount,
+    updatedSession.notes || null,
+    id
+  );
+
+  return updatedSession;
+}
+
+export function listProjectSessions(projectId: string): ProjectSession[] {
+  const stmt = db.prepare('SELECT * FROM project_sessions WHERE project_id = ? ORDER BY started_at DESC');
+  const rows = stmt.all(projectId) as any[];
+
+  return rows.map(row => ({
+    id: row.id,
+    projectId: row.project_id,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    status: row.status,
+    modelName: row.model_name,
+    eventCount: row.event_count,
+    toolCallCount: row.tool_call_count,
+    notes: row.notes
+  }));
+}
+
+export function incrementSessionCounts(sessionId: string, events: number = 1, toolCalls: number = 0): void {
+  const stmt = db.prepare(`
+    UPDATE project_sessions
+    SET event_count = event_count + ?, tool_call_count = tool_call_count + ?
+    WHERE id = ?
+  `);
+  stmt.run(events, toolCalls, sessionId);
+}
+
+// Auto-registration functions
+function parseDisplayName(projectId: string): string {
+  // group:project → project
+  // local:dirname-hash → dirname
+  if (projectId.startsWith('local:')) {
+    const rest = projectId.slice(6);
+    const dashIndex = rest.lastIndexOf('-');
+    return dashIndex > 0 ? rest.slice(0, dashIndex) : rest;
+  }
+  return projectId.split(':').pop() || projectId;
+}
+
+export function ensureProjectExists(sourceApp: string): Project {
+  let project = getProject(sourceApp);
+
+  if (!project) {
+    project = insertProject({
+      id: sourceApp,
+      displayName: parseDisplayName(sourceApp),
+      status: 'active'
+    });
+  }
+
+  return project;
+}
+
+export function ensureSessionExists(projectId: string, sessionId: string, modelName?: string): ProjectSession {
+  let session = getSession(sessionId);
+
+  if (!session) {
+    session = insertSession({
+      id: sessionId,
+      projectId,
+      startedAt: Date.now(),
+      status: 'active',
+      modelName
+    });
+  } else if (modelName && !session.modelName) {
+    // Update model name if it was missing
+    session = updateSession(sessionId, { modelName }) || session;
+  }
+
+  return session;
+}
+
+export function updateProjectActivity(projectId: string, sessionId: string): void {
+  const now = Date.now();
+  const stmt = db.prepare(`
+    UPDATE projects SET last_session_id = ?, last_activity_at = ?, updated_at = ?
+    WHERE id = ?
+  `);
+  stmt.run(sessionId, now, now, projectId);
 }
 
 export { db };
