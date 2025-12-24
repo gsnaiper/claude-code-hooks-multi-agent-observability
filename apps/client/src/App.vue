@@ -75,7 +75,33 @@
         </div>
       </div>
     </header>
-    
+
+    <!-- Tab Navigation -->
+    <div class="flex-shrink-0 bg-[var(--theme-bg-primary)] border-b border-[var(--theme-border-primary)]">
+      <div class="flex">
+        <button
+          @click="activeTab = 'events'"
+          class="px-4 py-2 text-sm font-medium transition-colors border-b-2"
+          :class="activeTab === 'events'
+            ? 'text-[var(--theme-primary)] border-[var(--theme-primary)]'
+            : 'text-[var(--theme-text-secondary)] border-transparent hover:text-[var(--theme-text-primary)]'"
+        >
+          Events
+        </button>
+        <button
+          @click="activeTab = 'projects'; selectedProject = null"
+          class="px-4 py-2 text-sm font-medium transition-colors border-b-2"
+          :class="activeTab === 'projects'
+            ? 'text-[var(--theme-primary)] border-[var(--theme-primary)]'
+            : 'text-[var(--theme-text-secondary)] border-transparent hover:text-[var(--theme-text-primary)]'"
+        >
+          Projects
+        </button>
+      </div>
+    </div>
+
+    <!-- Events View -->
+    <template v-if="activeTab === 'events'">
     <!-- Filters -->
     <FilterPanel
       v-if="showFilters"
@@ -114,13 +140,29 @@
         @select-agent="toggleAgentLane"
       />
     </div>
-    
+
     <!-- Stick to bottom button -->
     <StickScrollButton
       class="short:hidden"
       :stick-to-bottom="stickToBottom"
       @toggle="stickToBottom = !stickToBottom"
     />
+    </template>
+
+    <!-- Projects View -->
+    <template v-else-if="activeTab === 'projects'">
+      <div class="flex-1 overflow-hidden bg-[var(--theme-bg-primary)]">
+        <ProjectDetail
+          v-if="selectedProject"
+          :project="selectedProject"
+          @back="handleProjectBack"
+        />
+        <ProjectList
+          v-else
+          @select="handleProjectSelect"
+        />
+      </div>
+    </template>
     
     <!-- Error message -->
     <div
@@ -186,7 +228,10 @@ import ThemeManager from './components/ThemeManager.vue';
 import ToastNotification from './components/ToastNotification.vue';
 import AgentSwimLaneContainer from './components/AgentSwimLaneContainer.vue';
 import VoiceSettingsPanel from './components/VoiceSettingsPanel.vue';
+import ProjectList from './components/ProjectList.vue';
+import ProjectDetail from './components/ProjectDetail.vue';
 import { WS_URL } from './config';
+import type { Project } from './types';
 
 // WebSocket connection
 const { events, isConnected, error, clearEvents } = useWebSocket(WS_URL);
@@ -273,6 +318,19 @@ const uniqueAppNames = ref<string[]>([]); // Apps active in current time window
 const allAppNames = ref<string[]>([]); // All apps ever seen in session
 const selectedAgentLanes = ref<string[]>([]);
 const currentTimeRange = ref<TimeRange>('1m'); // Current time range from LivePulseChart
+
+// Tab navigation state
+const activeTab = ref<'events' | 'projects'>('events');
+const selectedProject = ref<Project | null>(null);
+
+// Handle project selection
+const handleProjectSelect = (project: Project) => {
+  selectedProject.value = project;
+};
+
+const handleProjectBack = () => {
+  selectedProject.value = null;
+};
 
 // Toast notifications
 interface Toast {
