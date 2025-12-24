@@ -23,19 +23,29 @@ import {
   incrementSessionCounts
 } from './db';
 import type { HookEvent, HumanInTheLoopResponse, Project, ProjectSearchQuery } from './types';
-import { 
-  createTheme, 
-  updateThemeById, 
-  getThemeById, 
-  searchThemes, 
-  deleteThemeById, 
-  exportThemeById, 
+import {
+  createTheme,
+  updateThemeById,
+  getThemeById,
+  searchThemes,
+  deleteThemeById,
+  exportThemeById,
   importTheme,
-  getThemeStats 
+  getThemeStats
 } from './theme';
+import { EmbeddingQueue, extractSearchableContent } from './vector';
 
 // Initialize database (async)
 await initDatabase();
+
+// Initialize vector search (async, with graceful degradation)
+const embeddingQueue = new EmbeddingQueue();
+try {
+  await embeddingQueue.init();
+  console.log('🔍 Semantic search enabled');
+} catch (error) {
+  console.warn('⚠️ Semantic search disabled:', error);
+}
 
 // Store WebSocket clients
 const wsClients = new Set<any>();
@@ -196,7 +206,18 @@ const server = Bun.serve({
         const isToolCall = event.hook_event_type.includes('ToolUse');
         await incrementSessionCounts(session.id, 1, isToolCall ? 1 : 0);
         await updateProjectActivity(projectId, event.session_id);
-        
+
+        // Enqueue for semantic search indexing (non-blocking)
+        const searchableContent = extractSearchableContent(savedEvent);
+        if (searchableContent && embeddingQueue.isEnabled()) {
+          embeddingQueue.enqueue(
+            savedEvent.id!,
+            savedEvent.session_id,
+            projectId,
+            searchableContent
+          );
+        }
+
         // Broadcast to all WebSocket clients
         const message = JSON.stringify({ type: 'event', data: savedEvent });
         wsClients.forEach(client => {
@@ -881,6 +902,78 @@ const server = Bun.serve({
       });
     }
 
+    // ============= SEMANTIC SEARCH API =============
+
+    // GET /api/search - Semantic search across all events
+    if (url.pathname === '/api/search' && req.method === 'GET') {
+      const query = url.searchParams.get('q');
+      const limit = parseInt(url.searchParams.get('limit') || '20');
+      const sessionId = url.searchParams.get('session_id') || undefined;
+      const projectId = url.searchParams.get('project_id') || undefined;
+
+      if (!query) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Query parameter "q" is required'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      if (!embeddingQueue.isEnabled()) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Semantic search is not available',
+          data: []
+        }), {
+          status: 503,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      try {
+        let results;
+
+        if (sessionId) {
+          results = await embeddingQueue.searchInSession(sessionId, query, limit);
+        } else if (projectId) {
+          results = await embeddingQueue.searchInProject(projectId, query, limit);
+        } else {
+          results = await embeddingQueue.search(query, limit);
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: results,
+          count: results.length
+        }), {
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('Search error:', error);
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Search failed',
+          data: []
+        }), {
+          status: 500,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // GET /api/search/stats - Get vector search statistics
+    if (url.pathname === '/api/search/stats' && req.method === 'GET') {
+      const stats = await embeddingQueue.getStats();
+      return new Response(JSON.stringify({
+        success: true,
+        data: stats
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
     // WebSocket upgrade
     if (url.pathname === '/stream') {
       const success = server.upgrade(req);
@@ -888,7 +981,7 @@ const server = Bun.serve({
         return undefined;
       }
     }
-    
+
     // Default response
     return new Response('Multi-Agent Observability Server', {
       headers: { ...headers, 'Content-Type': 'text/plain' }
