@@ -14,7 +14,10 @@ import type {
   ThemeSearchQuery,
   Project,
   ProjectSession,
-  ProjectSearchQuery
+  ProjectSearchQuery,
+  ProjectSetting,
+  ProjectSettingInput,
+  SettingType
 } from '../types';
 
 export class SqliteAdapter implements DatabaseAdapter {
@@ -182,6 +185,25 @@ export class SqliteAdapter implements DatabaseAdapter {
 
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_project ON project_sessions(project_id)');
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_started ON project_sessions(started_at DESC)');
+
+    // Project settings table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS project_settings (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        setting_type TEXT NOT NULL,
+        setting_key TEXT NOT NULL,
+        setting_value TEXT NOT NULL,
+        enabled INTEGER DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(project_id, setting_type, setting_key),
+        FOREIGN KEY (project_id) REFERENCES projects(id)
+      )
+    `);
+
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_project_settings_project ON project_settings(project_id)');
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_project_settings_type ON project_settings(project_id, setting_type)');
   }
 
   private runMigrations(): void {
@@ -202,6 +224,29 @@ export class SqliteAdapter implements DatabaseAdapter {
       for (const { column, type } of migrations) {
         if (!columnNames.includes(column)) {
           this.db.exec(`ALTER TABLE events ADD COLUMN ${column} ${type}`);
+        }
+      }
+    } catch {
+      // Ignore migration errors
+    }
+
+    // Migration: add session metadata columns to project_sessions table
+    try {
+      const sessionColumns = this.db.prepare("PRAGMA table_info(project_sessions)").all() as any[];
+      const sessionColumnNames = sessionColumns.map((col: any) => col.name);
+
+      const sessionMigrations = [
+        { column: 'cwd', type: 'TEXT' },
+        { column: 'transcript_path', type: 'TEXT' },
+        { column: 'permission_mode', type: 'TEXT' },
+        { column: 'initial_prompt', type: 'TEXT' },
+        { column: 'session_summary', type: 'TEXT' },
+        { column: 'git_branch', type: 'TEXT' }
+      ];
+
+      for (const { column, type } of sessionMigrations) {
+        if (!sessionColumnNames.includes(column)) {
+          this.db.exec(`ALTER TABLE project_sessions ADD COLUMN ${column} ${type}`);
         }
       }
     } catch {
@@ -729,7 +774,13 @@ export class SqliteAdapter implements DatabaseAdapter {
         model_name = ?,
         event_count = ?,
         tool_call_count = ?,
-        notes = ?
+        notes = ?,
+        cwd = ?,
+        transcript_path = ?,
+        permission_mode = ?,
+        initial_prompt = ?,
+        session_summary = ?,
+        git_branch = ?
       WHERE id = ?
     `).run(
       updatedSession.endedAt || null,
@@ -738,6 +789,12 @@ export class SqliteAdapter implements DatabaseAdapter {
       updatedSession.eventCount,
       updatedSession.toolCallCount,
       updatedSession.notes || null,
+      updatedSession.cwd || null,
+      updatedSession.transcriptPath || null,
+      updatedSession.permissionMode || null,
+      updatedSession.initialPrompt || null,
+      updatedSession.summary || null,
+      updatedSession.gitBranch || null,
       id
     );
 
@@ -768,7 +825,14 @@ export class SqliteAdapter implements DatabaseAdapter {
       modelName: row.model_name,
       eventCount: row.event_count,
       toolCallCount: row.tool_call_count,
-      notes: row.notes
+      notes: row.notes,
+      // Session metadata
+      cwd: row.cwd,
+      transcriptPath: row.transcript_path,
+      permissionMode: row.permission_mode,
+      initialPrompt: row.initial_prompt,
+      summary: row.session_summary,
+      gitBranch: row.git_branch
     };
   }
 
@@ -825,5 +889,221 @@ export class SqliteAdapter implements DatabaseAdapter {
       UPDATE projects SET last_session_id = ?, last_activity_at = ?, updated_at = ?
       WHERE id = ?
     `).run(sessionId, now, now, projectId);
+  }
+
+  // Backfill session metadata from SessionStart events
+  async backfillSessionMetadata(): Promise<{ updated: number; skipped: number }> {
+    // Get all sessions without cwd (metadata not filled in)
+    const sessionsWithoutCwd = this.db.prepare(`
+      SELECT id FROM project_sessions WHERE cwd IS NULL
+    `).all() as { id: string }[];
+
+    let updated = 0;
+    let skipped = 0;
+
+    for (const { id: sessionId } of sessionsWithoutCwd) {
+      // Find the first SessionStart event for this session
+      const startEvent = this.db.prepare(`
+        SELECT payload FROM events
+        WHERE session_id = ? AND (hook_event_type = 'SessionStart' OR hook_event_type LIKE '%SessionStart%')
+        ORDER BY timestamp ASC
+        LIMIT 1
+      `).get(sessionId) as { payload: string } | undefined;
+
+      if (startEvent) {
+        try {
+          const payload = JSON.parse(startEvent.payload);
+          const metadata: any = {};
+
+          if (payload.cwd) metadata.cwd = payload.cwd;
+          if (payload.transcript_path) metadata.transcriptPath = payload.transcript_path;
+          if (payload.permission_mode) metadata.permissionMode = payload.permission_mode;
+
+          if (Object.keys(metadata).length > 0) {
+            await this.updateSession(sessionId, metadata);
+            updated++;
+          } else {
+            skipped++;
+          }
+        } catch (e) {
+          skipped++;
+        }
+      } else {
+        skipped++;
+      }
+    }
+
+    return { updated, skipped };
+  }
+
+  // ============================================
+  // Project Settings Operations
+  // ============================================
+
+  async getProjectSettings(projectId: string, type?: SettingType): Promise<ProjectSetting[]> {
+    let sql = 'SELECT * FROM project_settings WHERE project_id = ?';
+    const params: any[] = [projectId];
+
+    if (type) {
+      sql += ' AND setting_type = ?';
+      params.push(type);
+    }
+
+    sql += ' ORDER BY setting_key ASC';
+
+    const rows = this.db.prepare(sql).all(...params) as any[];
+    return rows.map(row => this.rowToProjectSetting(row));
+  }
+
+  async getProjectSetting(projectId: string, type: SettingType, key: string): Promise<ProjectSetting | null> {
+    const row = this.db.prepare(
+      'SELECT * FROM project_settings WHERE project_id = ? AND setting_type = ? AND setting_key = ?'
+    ).get(projectId, type, key) as any;
+
+    return row ? this.rowToProjectSetting(row) : null;
+  }
+
+  async insertProjectSetting(projectId: string, type: SettingType, input: ProjectSettingInput): Promise<ProjectSetting> {
+    const id = crypto.randomUUID();
+    const now = Date.now();
+
+    this.db.prepare(`
+      INSERT INTO project_settings (id, project_id, setting_type, setting_key, setting_value, enabled, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      projectId,
+      type,
+      input.settingKey,
+      JSON.stringify(input.settingValue),
+      input.enabled !== false ? 1 : 0,
+      now,
+      now
+    );
+
+    return {
+      id,
+      projectId,
+      settingType: type,
+      settingKey: input.settingKey,
+      settingValue: input.settingValue,
+      enabled: input.enabled !== false,
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+
+  async updateProjectSetting(id: string, updates: Partial<ProjectSettingInput>): Promise<ProjectSetting | null> {
+    const row = this.db.prepare('SELECT * FROM project_settings WHERE id = ?').get(id) as any;
+    if (!row) return null;
+
+    const now = Date.now();
+    const current = this.rowToProjectSetting(row);
+
+    const updated = {
+      ...current,
+      settingValue: updates.settingValue ?? current.settingValue,
+      enabled: updates.enabled ?? current.enabled,
+      updatedAt: now
+    };
+
+    this.db.prepare(`
+      UPDATE project_settings SET setting_value = ?, enabled = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      JSON.stringify(updated.settingValue),
+      updated.enabled ? 1 : 0,
+      now,
+      id
+    );
+
+    return updated;
+  }
+
+  async deleteProjectSetting(id: string): Promise<boolean> {
+    const result = this.db.prepare('DELETE FROM project_settings WHERE id = ?').run(id);
+    return result.changes > 0;
+  }
+
+  async bulkUpsertProjectSettings(projectId: string, type: SettingType, settings: ProjectSettingInput[]): Promise<ProjectSetting[]> {
+    const results: ProjectSetting[] = [];
+    const now = Date.now();
+
+    for (const input of settings) {
+      const existing = await this.getProjectSetting(projectId, type, input.settingKey);
+
+      if (existing) {
+        const updated = await this.updateProjectSetting(existing.id, input);
+        if (updated) results.push(updated);
+      } else {
+        const inserted = await this.insertProjectSetting(projectId, type, input);
+        results.push(inserted);
+      }
+    }
+
+    return results;
+  }
+
+  private rowToProjectSetting(row: any): ProjectSetting {
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      settingType: row.setting_type as SettingType,
+      settingKey: row.setting_key,
+      settingValue: JSON.parse(row.setting_value),
+      enabled: Boolean(row.enabled),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  }
+
+  // ============================================
+  // Session Reassignment
+  // ============================================
+
+  async reassignSession(sessionId: string, newProjectId: string): Promise<{ session: ProjectSession; movedEvents: number }> {
+    const session = await this.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    const oldProjectId = session.projectId;
+    if (oldProjectId === newProjectId) {
+      return { session, movedEvents: 0 };
+    }
+
+    // Ensure new project exists
+    await this.ensureProjectExists(newProjectId);
+
+    // Get event counts before move
+    const eventCountResult = this.db.prepare(
+      'SELECT COUNT(*) as count FROM events WHERE session_id = ?'
+    ).get(sessionId) as any;
+    const eventCount = eventCountResult?.count || 0;
+
+    // Move all events to new project
+    this.db.prepare(
+      'UPDATE events SET project_id = ? WHERE session_id = ?'
+    ).run(newProjectId, sessionId);
+
+    // Update session's project
+    this.db.prepare(
+      'UPDATE project_sessions SET project_id = ? WHERE id = ?'
+    ).run(newProjectId, sessionId);
+
+    // Update old project stats (decrement)
+    const oldSessionStats = this.db.prepare(
+      'SELECT SUM(event_count) as events, SUM(tool_call_count) as tools FROM project_sessions WHERE project_id = ?'
+    ).get(oldProjectId) as any;
+
+    // Update new project activity
+    await this.updateProjectActivity(newProjectId, sessionId);
+
+    // Return updated session
+    const updatedSession = await this.getSession(sessionId);
+    return {
+      session: updatedSession!,
+      movedEvents: eventCount
+    };
   }
 }

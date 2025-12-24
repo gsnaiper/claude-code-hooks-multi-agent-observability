@@ -32,6 +32,18 @@
           </p>
         </div>
 
+        <!-- Settings button -->
+        <button
+          @click="showSettings = true"
+          class="p-2 rounded-lg bg-[var(--theme-bg-tertiary)] text-[var(--theme-text-secondary)] hover:text-[var(--theme-primary)] transition-colors"
+          title="Project settings"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
+
         <!-- Status badge -->
         <span
           class="px-2 py-1 text-xs rounded-full"
@@ -86,11 +98,12 @@
           :key="session.id"
           class="bg-[var(--theme-bg-secondary)] border border-[var(--theme-border-primary)] rounded-lg p-3"
         >
+          <!-- Header row: ID + timestamp -->
           <div class="flex items-start justify-between">
             <div class="flex items-center gap-2">
-              <!-- Session status -->
+              <!-- Session status dot -->
               <div
-                class="w-2 h-2 rounded-full"
+                class="w-2 h-2 rounded-full flex-shrink-0"
                 :class="sessionStatusColor(session.status)"
               ></div>
               <span class="text-[var(--theme-text-primary)] text-sm font-mono">
@@ -102,48 +115,123 @@
             </span>
           </div>
 
-          <!-- Session stats -->
-          <div class="flex items-center gap-4 mt-2 text-xs text-[var(--theme-text-tertiary)]">
-            <span v-if="session.modelName" class="text-[var(--theme-primary)]">
+          <!-- Working directory -->
+          <div v-if="session.cwd" class="flex items-center gap-1.5 mt-1.5 text-xs text-[var(--theme-text-secondary)]">
+            <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+            </svg>
+            <span class="font-mono truncate" :title="session.cwd">
+              {{ shortenPath(session.cwd) }}
+            </span>
+          </div>
+
+          <!-- Meta row: branch, model, events, tools -->
+          <div class="flex items-center flex-wrap gap-x-3 gap-y-1 mt-1.5 text-xs text-[var(--theme-text-tertiary)]">
+            <!-- Git branch -->
+            <span v-if="session.gitBranch" class="flex items-center gap-1 text-purple-400">
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              {{ session.gitBranch }}
+            </span>
+            <!-- Model badge -->
+            <span v-if="session.modelName" :class="modelBadgeClass(session.modelName)">
               {{ formatModelName(session.modelName) }}
             </span>
             <span>{{ session.eventCount }} events</span>
             <span>{{ session.toolCallCount }} tools</span>
             <span v-if="session.endedAt">
-              Duration: {{ formatDuration(session.startedAt, session.endedAt) }}
+              {{ formatDuration(session.startedAt, session.endedAt) }}
             </span>
-            <span v-else class="text-green-500">Active</span>
+            <span v-else class="text-green-500 font-medium">● Active</span>
           </div>
 
-          <!-- View Transcript Button -->
-          <button
-            v-if="session.eventCount > 0"
-            @click.stop="openTranscript(session.id)"
-            class="mt-2 px-3 py-1.5 text-xs font-medium bg-[var(--theme-primary)] hover:bg-[var(--theme-primary-dark)] text-white rounded-lg transition-colors"
+          <!-- Summary or initial prompt preview -->
+          <div
+            v-if="session.summary || session.initialPrompt"
+            class="mt-2 text-xs text-[var(--theme-text-secondary)] line-clamp-2 italic"
           >
-            View Transcript
-          </button>
+            "{{ truncateText(session.summary || session.initialPrompt, 100) }}"
+          </div>
+
+          <!-- Actions row -->
+          <div class="flex items-center gap-2 mt-2.5">
+            <!-- View Transcript Button -->
+            <button
+              v-if="session.eventCount > 0"
+              @click.stop="openTranscript(session.id)"
+              class="px-3 py-1.5 text-xs font-medium bg-[var(--theme-primary)] hover:bg-[var(--theme-primary-dark)] text-white rounded-lg transition-colors"
+            >
+              View Transcript
+            </button>
+
+            <!-- Reassign Session Button -->
+            <button
+              @click.stop="openReassignModal(session)"
+              class="px-3 py-1.5 text-xs font-medium bg-[var(--theme-bg-tertiary)] hover:bg-[var(--theme-border-primary)] text-[var(--theme-text-secondary)] rounded-lg transition-colors"
+              title="Move to another project"
+            >
+              <svg class="w-3.5 h-3.5 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+              </svg>
+              Move
+            </button>
+          </div>
         </div>
       </div>
     </div>
+
+    <!-- Project Settings Modal -->
+    <ProjectSettingsModal
+      :project="project"
+      :visible="showSettings"
+      @close="showSettings = false"
+      @update:project="handleProjectUpdate"
+    />
+
+    <!-- Session Reassign Modal -->
+    <SessionReassignModal
+      :session="sessionToReassign"
+      :currentProject="project"
+      :projects="allProjects"
+      :visible="showReassignModal"
+      @close="closeReassignModal"
+      @reassign="handleSessionReassign"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import type { Project, ProjectSession } from '../types'
 import { useProjects } from '../composables/useProjects'
 import { useEventColors } from '../composables/useEventColors'
+import ProjectSettingsModal from './ProjectSettingsModal.vue'
+import SessionReassignModal from './SessionReassignModal.vue'
 
 const props = defineProps<{
   project: Project
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   back: []
+  'update:project': [project: Project]
 }>()
 
-const { projectSessions: sessions, isLoading, fetchProjectSessions } = useProjects()
+const {
+  projects: allProjects,
+  projectSessions: sessions,
+  isLoading,
+  fetchProjects,
+  fetchProjectSessions,
+  updateProject,
+  reassignSession
+} = useProjects()
+
+// Modal state
+const showSettings = ref(false)
+const showReassignModal = ref(false)
+const sessionToReassign = ref<ProjectSession | null>(null)
 const { getHexColorForApp } = useEventColors()
 
 const projectColor = computed(() => getHexColorForApp(props.project.id))
@@ -205,8 +293,75 @@ function formatModelName(name: string): string {
   return name.slice(0, 15)
 }
 
+function modelBadgeClass(name: string): string {
+  const base = 'px-1.5 py-0.5 rounded text-xs font-medium'
+  if (name.includes('opus')) return `${base} bg-purple-500/20 text-purple-400`
+  if (name.includes('sonnet')) return `${base} bg-blue-500/20 text-blue-400`
+  if (name.includes('haiku')) return `${base} bg-green-500/20 text-green-400`
+  return `${base} bg-gray-500/20 text-gray-400`
+}
+
+function shortenPath(path: string): string {
+  if (!path) return ''
+
+  // Replace common home directory patterns with ~
+  let short = path
+    .replace(/^\/home\/[^/]+/, '~')
+    .replace(/^\/Users\/[^/]+/, '~')
+    .replace(/^C:\\Users\\[^\\]+/, '~')
+    .replace(/^\/mnt\/c\/Users\/[^/]+/, '~')
+
+  // If still long, show last 3 segments
+  const separator = path.includes('\\') ? '\\' : '/'
+  const parts = short.split(separator).filter(Boolean)
+  if (parts.length > 4) {
+    short = '.../' + parts.slice(-3).join('/')
+  }
+
+  return short
+}
+
+function truncateText(text: string | undefined, maxLen: number): string {
+  if (!text) return ''
+  if (text.length <= maxLen) return text
+  return text.slice(0, maxLen).trim() + '...'
+}
+
 function openTranscript(sessionId: string) {
   window.open(`/?transcript=${sessionId}`, '_blank')
+}
+
+// Open reassign modal
+function openReassignModal(session: ProjectSession) {
+  sessionToReassign.value = session
+  showReassignModal.value = true
+}
+
+// Close reassign modal
+function closeReassignModal() {
+  showReassignModal.value = false
+  sessionToReassign.value = null
+}
+
+// Handle session reassignment
+async function handleSessionReassign(sessionId: string, newProjectId: string) {
+  const result = await reassignSession(sessionId, newProjectId)
+  if (result) {
+    closeReassignModal()
+    // Refresh sessions list
+    await fetchProjectSessions(props.project.id)
+  }
+}
+
+// Handle project update from settings modal
+async function handleProjectUpdate(updatedProject: Project) {
+  const success = await updateProject(props.project.id, {
+    displayName: updatedProject.displayName,
+    description: updatedProject.description
+  })
+  if (success) {
+    emit('update:project', updatedProject)
+  }
 }
 
 // Load sessions when project changes
@@ -214,7 +369,8 @@ watch(() => props.project.id, (newId) => {
   fetchProjectSessions(newId)
 }, { immediate: true })
 
-onMounted(() => {
+onMounted(async () => {
+  await fetchProjects() // Load all projects for reassignment dropdown
   fetchProjectSessions(props.project.id)
 })
 </script>

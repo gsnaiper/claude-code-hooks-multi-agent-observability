@@ -114,6 +114,13 @@ export interface ProjectSession {
   eventCount: number;
   toolCallCount: number;
   notes?: string;
+  // Session metadata for identification
+  cwd?: string;                  // working directory
+  transcriptPath?: string;       // path to transcript file
+  permissionMode?: string;       // permission settings
+  initialPrompt?: string;        // first user message/task
+  summary?: string;              // session summary from Stop event
+  gitBranch?: string;            // git branch if available
 }
 
 export interface ProjectSearchQuery {
@@ -123,4 +130,67 @@ export interface ProjectSearchQuery {
   sortOrder?: 'asc' | 'desc';
   limit?: number;
   offset?: number;
+}
+
+// Project Settings Types
+export type SettingType = 'skills' | 'agents' | 'commands' | 'permissions' | 'hooks' | 'output_styles';
+
+export interface ProjectSetting {
+  id: string;
+  projectId: string;
+  settingType: SettingType;
+  settingKey: string;
+  settingValue: Record<string, any>;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ProjectSettingInput {
+  settingKey: string;
+  settingValue: Record<string, any>;
+  enabled?: boolean;
+}
+
+// Specific setting value interfaces
+export interface SkillSettingValue {
+  name: string;
+  description?: string;
+  path?: string;
+  allowedTools?: string[];
+}
+
+export interface AgentSettingValue {
+  name: string;
+  description: string;
+  model: 'haiku' | 'sonnet' | 'opus';
+  tools: string[];
+  color?: string;
+}
+
+export interface CommandSettingValue {
+  name: string;
+  description?: string;
+  argumentHint?: string;
+  allowedTools?: string[];
+}
+
+export interface PermissionsSettingValue {
+  protectedFiles?: string[];
+  hitlEnabled?: boolean;
+  hitlTypes?: Record<string, 'approval' | 'notify' | 'auto'>;
+  timeouts?: Record<string, number>;
+}
+
+// API Response types
+export interface ApiResponse<T = any> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  message?: string;
+}
+
+export interface ReassignSessionResult {
+  session: ProjectSession;
+  movedEvents: number;
 }

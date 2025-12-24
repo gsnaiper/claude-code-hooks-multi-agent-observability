@@ -20,9 +20,22 @@ import {
   ensureProjectExists,
   ensureSessionExists,
   updateProjectActivity,
-  incrementSessionCounts
+  incrementSessionCounts,
+  // Project settings
+  getProjectSettings,
+  getProjectSetting,
+  insertProjectSetting,
+  updateProjectSetting,
+  deleteProjectSetting,
+  bulkUpsertProjectSettings,
+  // Session reassignment
+  reassignSession,
+  // Session updates
+  updateSession,
+  // Backfill
+  backfillSessionMetadata
 } from './db';
-import type { HookEvent, HumanInTheLoopResponse, Project, ProjectSearchQuery } from './types';
+import type { HookEvent, HumanInTheLoopResponse, Project, ProjectSearchQuery, SettingType, ProjectSettingInput } from './types';
 import {
   createTheme,
   updateThemeById,
@@ -195,6 +208,27 @@ const server = Bun.serve({
         const projectId = event.source_app || 'orphaned:unknown';
         const project = await ensureProjectExists(projectId);
         const session = await ensureSessionExists(projectId, event.session_id, event.model_name);
+
+        // Extract session metadata from SessionStart events
+        const hookEventName = event.payload?.hook_event_name || event.hook_event_type;
+        if (hookEventName === 'SessionStart') {
+          const metadata: any = {};
+          if (event.payload?.cwd) metadata.cwd = event.payload.cwd;
+          if (event.payload?.transcript_path) metadata.transcriptPath = event.payload.transcript_path;
+          if (event.payload?.permission_mode) metadata.permissionMode = event.payload.permission_mode;
+
+          if (Object.keys(metadata).length > 0) {
+            await updateSession(session.id, metadata);
+          }
+        }
+
+        // Extract summary from Stop events
+        if (hookEventName === 'Stop' && event.payload?.summary) {
+          await updateSession(session.id, {
+            summary: event.payload.summary,
+            status: 'completed'
+          });
+        }
 
         // Add project_id to event
         const eventWithProject = { ...event, project_id: projectId };
@@ -900,6 +934,267 @@ const server = Bun.serve({
       }), {
         headers: { ...headers, 'Content-Type': 'application/json' }
       });
+    }
+
+    // ============= PROJECT SETTINGS API =============
+
+    // GET /api/projects/:id/settings - Get all settings for a project
+    // GET /api/projects/:id/settings/:type - Get settings of a specific type
+    if (url.pathname.match(/^\/api\/projects\/[^\/]+\/settings(\/[^\/]+)?$/) && req.method === 'GET') {
+      const pathParts = url.pathname.split('/');
+      const projectId = pathParts[3] ? decodeURIComponent(pathParts[3]) : '';
+      const settingType = pathParts[5] ? decodeURIComponent(pathParts[5]) as SettingType : undefined;
+
+      if (!projectId) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Project ID is required'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      const project = await getProject(projectId);
+      if (!project) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Project not found'
+        }), {
+          status: 404,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      const settings = await getProjectSettings(projectId, settingType);
+      return new Response(JSON.stringify({
+        success: true,
+        data: settings
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // POST /api/projects/:id/settings/:type - Bulk upsert settings of a type
+    if (url.pathname.match(/^\/api\/projects\/[^\/]+\/settings\/[^\/]+$/) && req.method === 'POST') {
+      const pathParts = url.pathname.split('/');
+      const projectId = pathParts[3] ? decodeURIComponent(pathParts[3]) : '';
+      const settingType = pathParts[5] ? decodeURIComponent(pathParts[5]) as SettingType : '';
+
+      if (!projectId || !settingType) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Project ID and setting type are required'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      const validTypes: SettingType[] = ['skills', 'agents', 'commands', 'permissions', 'hooks', 'output_styles'];
+      if (!validTypes.includes(settingType as SettingType)) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: `Invalid setting type. Must be one of: ${validTypes.join(', ')}`
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      try {
+        const body = await req.json() as { settings: ProjectSettingInput[] };
+        if (!body.settings || !Array.isArray(body.settings)) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Request body must contain a "settings" array'
+          }), {
+            status: 400,
+            headers: { ...headers, 'Content-Type': 'application/json' }
+          });
+        }
+
+        const settings = await bulkUpsertProjectSettings(projectId, settingType as SettingType, body.settings);
+        return new Response(JSON.stringify({
+          success: true,
+          data: settings
+        }), {
+          status: 201,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('Error upserting project settings:', error);
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Invalid request body'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // PUT /api/projects/:id/settings/:type/:key - Update a specific setting
+    if (url.pathname.match(/^\/api\/projects\/[^\/]+\/settings\/[^\/]+\/[^\/]+$/) && req.method === 'PUT') {
+      const pathParts = url.pathname.split('/');
+      const projectId = pathParts[3] ? decodeURIComponent(pathParts[3]) : '';
+      const settingType = pathParts[5] ? decodeURIComponent(pathParts[5]) as SettingType : '';
+      const settingKey = pathParts[6] ? decodeURIComponent(pathParts[6]) : '';
+
+      if (!projectId || !settingType || !settingKey) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Project ID, setting type, and setting key are required'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      try {
+        const body = await req.json() as Partial<ProjectSettingInput>;
+
+        // Check if setting exists
+        const existing = await getProjectSetting(projectId, settingType as SettingType, settingKey);
+
+        let setting;
+        if (existing) {
+          setting = await updateProjectSetting(existing.id, body);
+        } else {
+          // Create new setting if it doesn't exist
+          setting = await insertProjectSetting(projectId, settingType as SettingType, {
+            settingKey,
+            settingValue: body.settingValue || {},
+            enabled: body.enabled
+          });
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: setting
+        }), {
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('Error updating project setting:', error);
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Invalid request body'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // DELETE /api/projects/:id/settings/:type/:key - Delete a specific setting
+    if (url.pathname.match(/^\/api\/projects\/[^\/]+\/settings\/[^\/]+\/[^\/]+$/) && req.method === 'DELETE') {
+      const pathParts = url.pathname.split('/');
+      const projectId = pathParts[3] ? decodeURIComponent(pathParts[3]) : '';
+      const settingType = pathParts[5] ? decodeURIComponent(pathParts[5]) as SettingType : '';
+      const settingKey = pathParts[6] ? decodeURIComponent(pathParts[6]) : '';
+
+      if (!projectId || !settingType || !settingKey) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Project ID, setting type, and setting key are required'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      const existing = await getProjectSetting(projectId, settingType as SettingType, settingKey);
+      if (!existing) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Setting not found'
+        }), {
+          status: 404,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      await deleteProjectSetting(existing.id);
+      return new Response(JSON.stringify({
+        success: true,
+        message: 'Setting deleted'
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // ============= SESSION REASSIGNMENT API =============
+
+    // PUT /api/sessions/:id/reassign - Reassign session to a different project
+    if (url.pathname.match(/^\/api\/sessions\/[^\/]+\/reassign$/) && req.method === 'PUT') {
+      const pathParts = url.pathname.split('/');
+      const sessionId = pathParts[3] ? decodeURIComponent(pathParts[3]) : '';
+
+      if (!sessionId) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Session ID is required'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      try {
+        const body = await req.json() as { projectId: string };
+        if (!body.projectId) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Target project ID is required'
+          }), {
+            status: 400,
+            headers: { ...headers, 'Content-Type': 'application/json' }
+          });
+        }
+
+        const result = await reassignSession(sessionId, body.projectId);
+        return new Response(JSON.stringify({
+          success: true,
+          data: result,
+          message: `Session reassigned to ${body.projectId}. Moved ${result.movedEvents} events.`
+        }), {
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('Error reassigning session:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to reassign session';
+        return new Response(JSON.stringify({
+          success: false,
+          error: errorMessage
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // POST /api/sessions/backfill-metadata - Backfill session metadata from events
+    if (url.pathname === '/api/sessions/backfill-metadata' && req.method === 'POST') {
+      try {
+        const result = await backfillSessionMetadata();
+        return new Response(JSON.stringify({
+          success: true,
+          data: result,
+          message: `Backfill complete. Updated ${result.updated} sessions, skipped ${result.skipped}.`
+        }), {
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('Error backfilling session metadata:', error);
+        return new Response(JSON.stringify({
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to backfill session metadata'
+        }), {
+          status: 500,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
     }
 
     // ============= SEMANTIC SEARCH API =============

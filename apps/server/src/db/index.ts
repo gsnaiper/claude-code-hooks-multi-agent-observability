@@ -16,7 +16,10 @@ import type {
   ThemeSearchQuery,
   Project,
   ProjectSession,
-  ProjectSearchQuery
+  ProjectSearchQuery,
+  ProjectSetting,
+  ProjectSettingInput,
+  SettingType
 } from '../types';
 import { SqliteAdapter } from './sqlite-adapter';
 import { PostgresAdapter } from './postgres-adapter';
@@ -184,6 +187,46 @@ export function ensureSessionExists(projectId: string, sessionId: string, modelN
 
 export function updateProjectActivity(projectId: string, sessionId: string): Promise<void> {
   return adapter.updateProjectActivity(projectId, sessionId);
+}
+
+// ============================================
+// Project Settings Operations
+// ============================================
+
+export function getProjectSettings(projectId: string, type?: SettingType): Promise<ProjectSetting[]> {
+  return adapter.getProjectSettings(projectId, type);
+}
+
+export function getProjectSetting(projectId: string, type: SettingType, key: string): Promise<ProjectSetting | null> {
+  return adapter.getProjectSetting(projectId, type, key);
+}
+
+export function insertProjectSetting(projectId: string, type: SettingType, input: ProjectSettingInput): Promise<ProjectSetting> {
+  return adapter.insertProjectSetting(projectId, type, input);
+}
+
+export function updateProjectSetting(id: string, updates: Partial<ProjectSettingInput>): Promise<ProjectSetting | null> {
+  return adapter.updateProjectSetting(id, updates);
+}
+
+export function deleteProjectSetting(id: string): Promise<boolean> {
+  return adapter.deleteProjectSetting(id);
+}
+
+export function bulkUpsertProjectSettings(projectId: string, type: SettingType, settings: ProjectSettingInput[]): Promise<ProjectSetting[]> {
+  return adapter.bulkUpsertProjectSettings(projectId, type, settings);
+}
+
+// ============================================
+// Session Reassignment
+// ============================================
+
+export function reassignSession(sessionId: string, newProjectId: string): Promise<{ session: ProjectSession; movedEvents: number }> {
+  return adapter.reassignSession(sessionId, newProjectId);
+}
+
+export function backfillSessionMetadata(): Promise<{ updated: number; skipped: number }> {
+  return adapter.backfillSessionMetadata();
 }
 
 // Re-export types

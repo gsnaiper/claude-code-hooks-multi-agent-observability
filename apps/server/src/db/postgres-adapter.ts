@@ -20,7 +20,10 @@ import type {
   ThemeSearchQuery,
   Project,
   ProjectSession,
-  ProjectSearchQuery
+  ProjectSearchQuery,
+  ProjectSetting,
+  ProjectSettingInput,
+  SettingType
 } from '../types';
 
 export class PostgresAdapter implements DatabaseAdapter {
@@ -656,5 +659,177 @@ export class PostgresAdapter implements DatabaseAdapter {
       SET last_session_id = ${sessionId}, last_activity_at = NOW(), updated_at = NOW()
       WHERE id = ${projectId}
     `;
+  }
+
+  // ============================================
+  // Project Settings Operations
+  // ============================================
+
+  async getProjectSettings(projectId: string, type?: SettingType): Promise<ProjectSetting[]> {
+    let rows;
+    if (type) {
+      rows = await this.db`
+        SELECT * FROM project_settings
+        WHERE project_id = ${projectId} AND setting_type = ${type}
+        ORDER BY setting_key ASC
+      `;
+    } else {
+      rows = await this.db`
+        SELECT * FROM project_settings
+        WHERE project_id = ${projectId}
+        ORDER BY setting_key ASC
+      `;
+    }
+
+    return (rows as any[]).map(row => this.rowToProjectSetting(row));
+  }
+
+  async getProjectSetting(projectId: string, type: SettingType, key: string): Promise<ProjectSetting | null> {
+    const rows = await this.db`
+      SELECT * FROM project_settings
+      WHERE project_id = ${projectId} AND setting_type = ${type} AND setting_key = ${key}
+    `;
+
+    const row = (rows as any[])[0];
+    return row ? this.rowToProjectSetting(row) : null;
+  }
+
+  async insertProjectSetting(projectId: string, type: SettingType, input: ProjectSettingInput): Promise<ProjectSetting> {
+    const id = crypto.randomUUID();
+    const now = Date.now();
+
+    await this.db`
+      INSERT INTO project_settings (id, project_id, setting_type, setting_key, setting_value, enabled, created_at, updated_at)
+      VALUES (
+        ${id},
+        ${projectId},
+        ${type},
+        ${input.settingKey},
+        ${JSON.stringify(input.settingValue)}::jsonb,
+        ${input.enabled !== false},
+        NOW(),
+        NOW()
+      )
+    `;
+
+    return {
+      id,
+      projectId,
+      settingType: type,
+      settingKey: input.settingKey,
+      settingValue: input.settingValue,
+      enabled: input.enabled !== false,
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+
+  async updateProjectSetting(id: string, updates: Partial<ProjectSettingInput>): Promise<ProjectSetting | null> {
+    const rows = await this.db`SELECT * FROM project_settings WHERE id = ${id}`;
+    const row = (rows as any[])[0];
+    if (!row) return null;
+
+    const now = Date.now();
+    const current = this.rowToProjectSetting(row);
+
+    const updated = {
+      ...current,
+      settingValue: updates.settingValue ?? current.settingValue,
+      enabled: updates.enabled ?? current.enabled,
+      updatedAt: now
+    };
+
+    await this.db`
+      UPDATE project_settings
+      SET setting_value = ${JSON.stringify(updated.settingValue)}::jsonb,
+          enabled = ${updated.enabled},
+          updated_at = NOW()
+      WHERE id = ${id}
+    `;
+
+    return updated;
+  }
+
+  async deleteProjectSetting(id: string): Promise<boolean> {
+    await this.db`DELETE FROM project_settings WHERE id = ${id}`;
+    return true;
+  }
+
+  async bulkUpsertProjectSettings(projectId: string, type: SettingType, settings: ProjectSettingInput[]): Promise<ProjectSetting[]> {
+    const results: ProjectSetting[] = [];
+
+    for (const input of settings) {
+      const existing = await this.getProjectSetting(projectId, type, input.settingKey);
+
+      if (existing) {
+        const updated = await this.updateProjectSetting(existing.id, input);
+        if (updated) results.push(updated);
+      } else {
+        const inserted = await this.insertProjectSetting(projectId, type, input);
+        results.push(inserted);
+      }
+    }
+
+    return results;
+  }
+
+  private rowToProjectSetting(row: any): ProjectSetting {
+    const parseJsonb = (val: any) => {
+      if (!val) return {};
+      if (typeof val === 'string') {
+        try { return JSON.parse(val); } catch { return val; }
+      }
+      return val;
+    };
+
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      settingType: row.setting_type as SettingType,
+      settingKey: row.setting_key,
+      settingValue: parseJsonb(row.setting_value),
+      enabled: Boolean(row.enabled),
+      createdAt: new Date(row.created_at).getTime(),
+      updatedAt: new Date(row.updated_at).getTime()
+    };
+  }
+
+  // ============================================
+  // Session Reassignment
+  // ============================================
+
+  async reassignSession(sessionId: string, newProjectId: string): Promise<{ session: ProjectSession; movedEvents: number }> {
+    const session = await this.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    const oldProjectId = session.projectId;
+    if (oldProjectId === newProjectId) {
+      return { session, movedEvents: 0 };
+    }
+
+    // Ensure new project exists
+    await this.ensureProjectExists(newProjectId);
+
+    // Get event counts before move
+    const countResult = await this.db`SELECT COUNT(*) as count FROM events WHERE session_id = ${sessionId}`;
+    const eventCount = Number((countResult as any[])[0]?.count) || 0;
+
+    // Move all events to new project
+    await this.db`UPDATE events SET project_id = ${newProjectId} WHERE session_id = ${sessionId}`;
+
+    // Update session's project
+    await this.db`UPDATE project_sessions SET project_id = ${newProjectId} WHERE id = ${sessionId}`;
+
+    // Update new project activity
+    await this.updateProjectActivity(newProjectId, sessionId);
+
+    // Return updated session
+    const updatedSession = await this.getSession(sessionId);
+    return {
+      session: updatedSession!,
+      movedEvents: eventCount
+    };
   }
 }

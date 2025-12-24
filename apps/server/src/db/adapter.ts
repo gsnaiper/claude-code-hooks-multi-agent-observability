@@ -12,7 +12,10 @@ import type {
   ThemeSearchQuery,
   Project,
   ProjectSession,
-  ProjectSearchQuery
+  ProjectSearchQuery,
+  ProjectSetting,
+  ProjectSettingInput,
+  SettingType
 } from '../types';
 
 /**
@@ -156,4 +159,36 @@ export interface DatabaseAdapter {
 
   /** Update project's last activity timestamp */
   updateProjectActivity(projectId: string, sessionId: string): Promise<void>;
+
+  // ============================================
+  // Project Settings Operations
+  // ============================================
+
+  /** Get all settings for a project, optionally filtered by type */
+  getProjectSettings(projectId: string, type?: SettingType): Promise<ProjectSetting[]>;
+
+  /** Get a specific setting by project, type, and key */
+  getProjectSetting(projectId: string, type: SettingType, key: string): Promise<ProjectSetting | null>;
+
+  /** Insert a new project setting */
+  insertProjectSetting(projectId: string, type: SettingType, input: ProjectSettingInput): Promise<ProjectSetting>;
+
+  /** Update an existing project setting */
+  updateProjectSetting(id: string, updates: Partial<ProjectSettingInput>): Promise<ProjectSetting | null>;
+
+  /** Delete a project setting */
+  deleteProjectSetting(id: string): Promise<boolean>;
+
+  /** Bulk upsert settings of a specific type for a project */
+  bulkUpsertProjectSettings(projectId: string, type: SettingType, settings: ProjectSettingInput[]): Promise<ProjectSetting[]>;
+
+  // ============================================
+  // Session Reassignment
+  // ============================================
+
+  /** Reassign a session to a different project, moving all events */
+  reassignSession(sessionId: string, newProjectId: string): Promise<{ session: ProjectSession; movedEvents: number }>;
+
+  /** Backfill session metadata from SessionStart events */
+  backfillSessionMetadata(): Promise<{ updated: number; skipped: number }>;
 }

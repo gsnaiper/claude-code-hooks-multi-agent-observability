@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue'
-import type { Project, ProjectSession, ProjectSearchQuery } from '../types'
+import type { Project, ProjectSession, ProjectSearchQuery, ReassignSessionResult } from '../types'
 import { API_BASE_URL } from '../config'
 
 // Reactive state
@@ -167,6 +167,38 @@ export function useProjects() {
     }
   }
 
+  // Reassign session to a different project
+  async function reassignSession(sessionId: string, newProjectId: string): Promise<ReassignSessionResult | null> {
+    isLoading.value = true
+    error.value = null
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/sessions/${encodeURIComponent(sessionId)}/reassign`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: newProjectId })
+      })
+      const data = await response.json()
+
+      if (data.success) {
+        // Remove session from current project sessions list
+        const idx = projectSessions.value.findIndex(s => s.id === sessionId)
+        if (idx !== -1) {
+          projectSessions.value.splice(idx, 1)
+        }
+        return data.data
+      } else {
+        error.value = data.error || 'Failed to reassign session'
+        return null
+      }
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Network error'
+      return null
+    } finally {
+      isLoading.value = false
+    }
+  }
+
   // Computed helpers
   const activeProjects = computed(() =>
     projects.value.filter(p => p.status === 'active')
@@ -199,6 +231,7 @@ export function useProjects() {
     updateProject,
     archiveProject,
     selectProject,
+    reassignSession,
 
     // Computed
     activeProjects,

@@ -1,7 +1,7 @@
 <template>
   <div
     class="group relative bg-[var(--theme-bg-secondary)] border border-[var(--theme-border-primary)] rounded-lg p-4 cursor-pointer transition-all duration-200 hover:border-[var(--theme-primary)] hover:shadow-lg"
-    @click="$emit('select', project)"
+    @click="handleClick"
   >
     <!-- Status indicator -->
     <div
@@ -17,8 +17,24 @@
 
     <!-- Content -->
     <div class="pl-3">
-      <!-- Title -->
-      <h3 class="text-[var(--theme-text-primary)] font-semibold text-sm truncate pr-4">
+      <!-- Title - Inline Editable -->
+      <div v-if="isEditing" class="pr-4" @click.stop>
+        <input
+          ref="editInput"
+          v-model="editedName"
+          type="text"
+          class="w-full bg-[var(--theme-bg-tertiary)] border border-[var(--theme-primary)] rounded px-2 py-0.5 text-sm font-semibold text-[var(--theme-text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--theme-primary)]"
+          @keyup.enter="saveEdit"
+          @keyup.escape="cancelEdit"
+          @blur="saveEdit"
+        />
+      </div>
+      <h3
+        v-else
+        class="text-[var(--theme-text-primary)] font-semibold text-sm truncate pr-4"
+        @dblclick.stop="startEdit"
+        :title="'Double-click to rename'"
+      >
         {{ project.displayName || project.id }}
       </h3>
 
@@ -65,7 +81,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import type { Project } from '../types'
 import { useEventColors } from '../composables/useEventColors'
 
@@ -73,11 +89,50 @@ const props = defineProps<{
   project: Project
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   select: [project: Project]
+  rename: [projectId: string, newName: string]
 }>()
 
 const { getHexColorForApp } = useEventColors()
+
+// Inline editing state
+const isEditing = ref(false)
+const editedName = ref('')
+const editInput = ref<HTMLInputElement | null>(null)
+
+// Handle card click - only select if not editing
+function handleClick() {
+  if (!isEditing.value) {
+    emit('select', props.project)
+  }
+}
+
+// Start inline edit mode
+async function startEdit() {
+  editedName.value = props.project.displayName || props.project.id
+  isEditing.value = true
+  await nextTick()
+  editInput.value?.focus()
+  editInput.value?.select()
+}
+
+// Save the edit
+function saveEdit() {
+  if (!isEditing.value) return
+
+  const trimmedName = editedName.value.trim()
+  if (trimmedName && trimmedName !== (props.project.displayName || props.project.id)) {
+    emit('rename', props.project.id, trimmedName)
+  }
+  isEditing.value = false
+}
+
+// Cancel the edit
+function cancelEdit() {
+  isEditing.value = false
+  editedName.value = ''
+}
 
 const projectColor = computed(() => getHexColorForApp(props.project.id))
 
