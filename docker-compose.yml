@@ -23,6 +23,27 @@ services:
       retries: 3
     restart: unless-stopped
 
+  # PostgreSQL for structured data storage (optional, SQLite is default)
+  postgres:
+    image: postgres:16-alpine
+    container_name: claude-hooks-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: observability
+      POSTGRES_USER: observability
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev_password_2024}
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./apps/server/init.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U observability -d observability"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
   # Observability server (optional, for development)
   # server:
   #   build:
@@ -39,4 +60,6 @@ services:
 
 volumes:
   redis_data:
+    driver: local
+  postgres_data:
     driver: local

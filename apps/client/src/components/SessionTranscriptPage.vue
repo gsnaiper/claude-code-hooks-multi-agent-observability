@@ -99,13 +99,59 @@
 
     <!-- Content -->
     <div v-else class="flex-1 p-4 mobile:p-3 overflow-hidden flex flex-col">
-      <ChatTranscript :chat="filteredChat" />
+      <ChatTranscript :chat="paginatedChat" />
+
+      <!-- Pagination Controls -->
+      <div v-if="totalPages > 1" class="flex-shrink-0 flex items-center justify-between p-3 mt-2 bg-[var(--theme-bg-secondary)] border border-[var(--theme-border-primary)] rounded-lg">
+        <button
+          @click="goToPage(currentPage - 1)"
+          :disabled="currentPage === 0"
+          class="px-4 py-2 bg-[var(--theme-bg-tertiary)] hover:bg-[var(--theme-border-primary)] text-[var(--theme-text-primary)] font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Previous
+        </button>
+
+        <div class="flex items-center gap-3">
+          <span class="text-[var(--theme-text-secondary)]">
+            Page {{ currentPage + 1 }} of {{ totalPages }}
+          </span>
+          <span class="text-[var(--theme-text-tertiary)] text-sm">
+            ({{ paginatedChat.length }} of {{ filteredChat.length }} messages)
+          </span>
+
+          <!-- Jump to page -->
+          <div class="flex items-center gap-2 ml-4">
+            <input
+              v-model.number="jumpToPage"
+              type="number"
+              min="1"
+              :max="totalPages"
+              class="w-16 px-2 py-1 text-sm text-center border border-[var(--theme-border-secondary)] rounded bg-[var(--theme-bg-tertiary)] text-[var(--theme-text-primary)]"
+              @keyup.enter="goToPage(jumpToPage - 1)"
+            />
+            <button
+              @click="goToPage(jumpToPage - 1)"
+              class="px-3 py-1 text-sm bg-[var(--theme-primary)] hover:bg-[var(--theme-primary-dark)] text-white font-medium rounded transition-colors"
+            >
+              Go
+            </button>
+          </div>
+        </div>
+
+        <button
+          @click="goToPage(currentPage + 1)"
+          :disabled="currentPage >= totalPages - 1"
+          class="px-4 py-2 bg-[var(--theme-bg-tertiary)] hover:bg-[var(--theme-border-primary)] text-[var(--theme-text-primary)] font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Next
+        </button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import ChatTranscript from './ChatTranscript.vue';
 import { API_BASE_URL } from '../config';
 import type { HookEvent, ProjectSession } from '../types';
@@ -122,6 +168,11 @@ const searchQuery = ref('');
 const activeSearchQuery = ref('');
 const activeFilters = ref<string[]>([]);
 const copyButtonText = ref('Copy All');
+
+// Pagination
+const PAGE_SIZE = 500;
+const currentPage = ref(0);
+const jumpToPage = ref(1);
 
 const filters = [
   { type: 'user', label: 'User', icon: '' },
@@ -245,6 +296,27 @@ const filteredChat = computed(() => {
     return matchesQueryCondition && matchesFilterCondition;
   });
 });
+
+// Pagination computed
+const totalPages = computed(() =>
+  Math.ceil(filteredChat.value.length / PAGE_SIZE)
+);
+
+const paginatedChat = computed(() => {
+  const start = currentPage.value * PAGE_SIZE;
+  return filteredChat.value.slice(start, start + PAGE_SIZE);
+});
+
+const goToPage = (page: number) => {
+  currentPage.value = Math.max(0, Math.min(page, totalPages.value - 1));
+  jumpToPage.value = currentPage.value + 1;
+};
+
+// Reset to first page when filters change
+watch([activeSearchQuery, activeFilters], () => {
+  currentPage.value = 0;
+  jumpToPage.value = 1;
+}, { deep: true });
 
 async function fetchSessionEvents() {
   isLoading.value = true;
