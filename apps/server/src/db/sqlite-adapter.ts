@@ -9,6 +9,8 @@ import { Database } from 'bun:sqlite';
 import type { DatabaseAdapter, AudioCacheEntry } from './adapter';
 import type {
   HookEvent,
+  EventSummary,
+  EventFilters,
   FilterOptions,
   Theme,
   ThemeSearchQuery,
@@ -17,7 +19,12 @@ import type {
   ProjectSearchQuery,
   ProjectSetting,
   ProjectSettingInput,
-  SettingType
+  SettingType,
+  Repository,
+  RepositoryInput,
+  SessionSetting,
+  SessionSettingInput,
+  OverrideMode
 } from '../types';
 
 export class SqliteAdapter implements DatabaseAdapter {
@@ -204,6 +211,44 @@ export class SqliteAdapter implements DatabaseAdapter {
 
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_project_settings_project ON project_settings(project_id)');
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_project_settings_type ON project_settings(project_id, setting_type)');
+
+    // Project repositories table (multi-repo support)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS project_repositories (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        git_remote_url TEXT,
+        local_path TEXT,
+        git_branch TEXT,
+        is_primary INTEGER DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        UNIQUE(project_id, git_remote_url),
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+      )
+    `);
+
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_project_repos_project ON project_repositories(project_id)');
+
+    // Session settings table (inheritance from project)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS session_settings (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        setting_type TEXT NOT NULL,
+        setting_key TEXT NOT NULL,
+        setting_value TEXT NOT NULL,
+        override_mode TEXT NOT NULL DEFAULT 'replace',
+        enabled INTEGER DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(session_id, setting_type, setting_key),
+        FOREIGN KEY (session_id) REFERENCES project_sessions(id) ON DELETE CASCADE
+      )
+    `);
+
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_session_settings_session ON session_settings(session_id)');
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_session_settings_type ON session_settings(session_id, setting_type)');
   }
 
   private runMigrations(): void {
@@ -248,6 +293,18 @@ export class SqliteAdapter implements DatabaseAdapter {
         if (!sessionColumnNames.includes(column)) {
           this.db.exec(`ALTER TABLE project_sessions ADD COLUMN ${column} ${type}`);
         }
+      }
+    } catch {
+      // Ignore migration errors
+    }
+
+    // Migration: add is_manual column to projects table
+    try {
+      const projectColumns = this.db.prepare("PRAGMA table_info(projects)").all() as any[];
+      const projectColumnNames = projectColumns.map((col: any) => col.name);
+
+      if (!projectColumnNames.includes('is_manual')) {
+        this.db.exec(`ALTER TABLE projects ADD COLUMN is_manual INTEGER DEFAULT 0`);
       }
     } catch {
       // Ignore migration errors
@@ -341,6 +398,112 @@ export class SqliteAdapter implements DatabaseAdapter {
     this.db.prepare('UPDATE events SET humanInTheLoopStatus = ? WHERE id = ?')
       .run(JSON.stringify(status), id);
 
+    const row = this.db.prepare(`
+      SELECT id, source_app, session_id, hook_event_type, payload, chat, summary, timestamp, humanInTheLoop, humanInTheLoopStatus, model_name, project_id
+      FROM events
+      WHERE id = ?
+    `).get(id) as any;
+
+    return row ? this.rowToEvent(row) : null;
+  }
+
+  async getEventSummaries(filters?: EventFilters): Promise<EventSummary[]> {
+    const limit = filters?.limit ?? 300;
+    const offset = filters?.offset ?? 0;
+
+    // Build time range conditions
+    let fromTs: number | null = null;
+    let toTs: number | null = null;
+
+    if (filters?.from) {
+      fromTs = filters.from;
+    } else if (filters?.timeRange && filters.timeRange !== 'all' && filters.timeRange !== 'live') {
+      const now = Date.now();
+      const ranges: Record<string, number> = {
+        '1h': 60 * 60 * 1000,
+        '24h': 24 * 60 * 60 * 1000,
+        '7d': 7 * 24 * 60 * 60 * 1000,
+        '30d': 30 * 24 * 60 * 60 * 1000
+      };
+      fromTs = now - (ranges[filters.timeRange] || 0);
+    }
+
+    if (filters?.to) {
+      toTs = filters.to;
+    }
+
+    // Build WHERE conditions dynamically
+    const conditions: string[] = [];
+    const params: any[] = [];
+
+    if (fromTs !== null) {
+      conditions.push('timestamp >= ?');
+      params.push(fromTs);
+    }
+    if (toTs !== null) {
+      conditions.push('timestamp <= ?');
+      params.push(toTs);
+    }
+    if (filters?.source_app) {
+      conditions.push('source_app = ?');
+      params.push(filters.source_app);
+    }
+    if (filters?.session_id) {
+      conditions.push('session_id = ?');
+      params.push(filters.session_id);
+    }
+    if (filters?.hook_event_type) {
+      conditions.push('hook_event_type = ?');
+      params.push(filters.hook_event_type);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const sql = `
+      SELECT
+        id,
+        source_app,
+        session_id,
+        hook_event_type,
+        timestamp,
+        model_name,
+        summary,
+        project_id,
+        json_extract(payload, '$.tool_name') as tool_name,
+        json_extract(payload, '$.tool_input.command') as tool_command,
+        json_extract(payload, '$.tool_input.file_path') as tool_file_path,
+        CASE WHEN humanInTheLoop IS NOT NULL THEN 1 ELSE 0 END as has_hitl,
+        json_extract(humanInTheLoop, '$.type') as hitl_type,
+        CASE WHEN humanInTheLoopStatus IS NOT NULL THEN 'responded' ELSE 'pending' END as hitl_status
+      FROM events
+      ${whereClause}
+      ORDER BY timestamp DESC
+      LIMIT ? OFFSET ?
+    `;
+
+    params.push(limit, offset);
+
+    const rows = this.db.prepare(sql).all(...params) as any[];
+
+    return rows.map(row => ({
+      id: row.id,
+      source_app: row.source_app,
+      session_id: row.session_id,
+      hook_event_type: row.hook_event_type,
+      timestamp: row.timestamp,
+      model_name: row.model_name || undefined,
+      summary: row.summary || undefined,
+      project_id: row.project_id || undefined,
+      tool_name: row.tool_name || undefined,
+      tool_command: row.tool_command || undefined,
+      tool_file_path: row.tool_file_path || undefined,
+      has_hitl: row.has_hitl === 1,
+      hitl_type: row.hitl_type || undefined,
+      hitl_status: row.has_hitl === 1 ? (row.hitl_status as 'pending' | 'responded') : undefined
+    })).reverse(); // Reverse to get chronological order (oldest first)
+  }
+
+  async getEventById(id: number): Promise<HookEvent | null> {
     const row = this.db.prepare(`
       SELECT id, source_app, session_id, hook_event_type, payload, chat, summary, timestamp, humanInTheLoop, humanInTheLoopStatus, model_name, project_id
       FROM events
@@ -720,6 +883,7 @@ export class SqliteAdapter implements DatabaseAdapter {
       lastSessionId: row.last_session_id,
       lastActivityAt: row.last_activity_at,
       status: row.status,
+      isManual: Boolean(row.is_manual),
       metadata: row.metadata ? JSON.parse(row.metadata) : undefined
     };
   }
@@ -1105,5 +1269,384 @@ export class SqliteAdapter implements DatabaseAdapter {
       session: updatedSession!,
       movedEvents: eventCount
     };
+  }
+
+  // ============================================
+  // Repository Operations (Multi-repo support)
+  // ============================================
+
+  async getProjectRepositories(projectId: string): Promise<Repository[]> {
+    const rows = this.db.prepare(
+      'SELECT * FROM project_repositories WHERE project_id = ? ORDER BY is_primary DESC, name ASC'
+    ).all(projectId) as any[];
+    return rows.map(row => this.rowToRepository(row));
+  }
+
+  async getRepository(id: string): Promise<Repository | null> {
+    const row = this.db.prepare('SELECT * FROM project_repositories WHERE id = ?').get(id) as any;
+    return row ? this.rowToRepository(row) : null;
+  }
+
+  async insertRepository(projectId: string, input: RepositoryInput): Promise<Repository> {
+    const id = crypto.randomUUID();
+    const now = Date.now();
+
+    // Use transaction to ensure atomicity
+    const insertTx = this.db.transaction(() => {
+      // If this is set as primary, clear other primaries first
+      if (input.isPrimary) {
+        this.db.prepare('UPDATE project_repositories SET is_primary = 0 WHERE project_id = ?').run(projectId);
+      }
+
+      this.db.prepare(`
+        INSERT INTO project_repositories (id, project_id, name, git_remote_url, local_path, git_branch, is_primary, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        projectId,
+        input.name,
+        input.gitRemoteUrl || null,
+        input.localPath || null,
+        input.gitBranch || null,
+        input.isPrimary ? 1 : 0,
+        now
+      );
+    });
+
+    insertTx();
+
+    return {
+      id,
+      projectId,
+      name: input.name,
+      gitRemoteUrl: input.gitRemoteUrl,
+      localPath: input.localPath,
+      gitBranch: input.gitBranch,
+      isPrimary: input.isPrimary || false,
+      createdAt: now
+    };
+  }
+
+  async updateRepository(id: string, updates: Partial<RepositoryInput>): Promise<Repository | null> {
+    const row = this.db.prepare('SELECT * FROM project_repositories WHERE id = ?').get(id) as any;
+    if (!row) return null;
+
+    const current = this.rowToRepository(row);
+
+    const updated = {
+      ...current,
+      name: updates.name ?? current.name,
+      gitRemoteUrl: updates.gitRemoteUrl ?? current.gitRemoteUrl,
+      localPath: updates.localPath ?? current.localPath,
+      gitBranch: updates.gitBranch ?? current.gitBranch,
+      isPrimary: updates.isPrimary ?? current.isPrimary
+    };
+
+    // Use transaction to ensure atomicity
+    const updateTx = this.db.transaction(() => {
+      // If setting as primary, clear other primaries first
+      if (updates.isPrimary && !current.isPrimary) {
+        this.db.prepare('UPDATE project_repositories SET is_primary = 0 WHERE project_id = ?').run(current.projectId);
+      }
+
+      this.db.prepare(`
+        UPDATE project_repositories SET name = ?, git_remote_url = ?, local_path = ?, git_branch = ?, is_primary = ?
+        WHERE id = ?
+      `).run(
+        updated.name,
+        updated.gitRemoteUrl || null,
+        updated.localPath || null,
+        updated.gitBranch || null,
+        updated.isPrimary ? 1 : 0,
+        id
+      );
+    });
+
+    updateTx();
+
+    return updated;
+  }
+
+  async deleteRepository(id: string): Promise<boolean> {
+    const result = this.db.prepare('DELETE FROM project_repositories WHERE id = ?').run(id);
+    return result.changes > 0;
+  }
+
+  async setPrimaryRepository(projectId: string, repoId: string): Promise<boolean> {
+    // First verify the repository belongs to this project
+    const repo = this.db.prepare(
+      'SELECT id FROM project_repositories WHERE id = ? AND project_id = ?'
+    ).get(repoId, projectId);
+
+    if (!repo) return false;
+
+    // Use transaction to ensure atomicity
+    const setPrimaryTx = this.db.transaction(() => {
+      // Clear all primaries for this project
+      this.db.prepare('UPDATE project_repositories SET is_primary = 0 WHERE project_id = ?').run(projectId);
+
+      // Set the specified repo as primary
+      this.db.prepare('UPDATE project_repositories SET is_primary = 1 WHERE id = ?').run(repoId);
+    });
+
+    setPrimaryTx();
+    return true;
+  }
+
+  private rowToRepository(row: any): Repository {
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      name: row.name,
+      gitRemoteUrl: row.git_remote_url || undefined,
+      localPath: row.local_path || undefined,
+      gitBranch: row.git_branch || undefined,
+      isPrimary: Boolean(row.is_primary),
+      createdAt: row.created_at
+    };
+  }
+
+  // ============================================
+  // Session Settings Operations (Inheritance)
+  // ============================================
+
+  async getSessionSettings(sessionId: string, type?: SettingType): Promise<SessionSetting[]> {
+    let sql = 'SELECT * FROM session_settings WHERE session_id = ?';
+    const params: any[] = [sessionId];
+
+    if (type) {
+      sql += ' AND setting_type = ?';
+      params.push(type);
+    }
+
+    sql += ' ORDER BY setting_key ASC';
+
+    const rows = this.db.prepare(sql).all(...params) as any[];
+    return rows.map(row => this.rowToSessionSetting(row));
+  }
+
+  async getSessionSetting(sessionId: string, type: SettingType, key: string): Promise<SessionSetting | null> {
+    const row = this.db.prepare(
+      'SELECT * FROM session_settings WHERE session_id = ? AND setting_type = ? AND setting_key = ?'
+    ).get(sessionId, type, key) as any;
+
+    return row ? this.rowToSessionSetting(row) : null;
+  }
+
+  async insertSessionSetting(sessionId: string, type: SettingType, input: SessionSettingInput): Promise<SessionSetting> {
+    const id = crypto.randomUUID();
+    const now = Date.now();
+
+    this.db.prepare(`
+      INSERT INTO session_settings (id, session_id, setting_type, setting_key, setting_value, override_mode, enabled, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      sessionId,
+      type,
+      input.settingKey,
+      JSON.stringify(input.settingValue),
+      input.overrideMode || 'replace',
+      input.enabled !== false ? 1 : 0,
+      now,
+      now
+    );
+
+    return {
+      id,
+      sessionId,
+      settingType: type,
+      settingKey: input.settingKey,
+      settingValue: input.settingValue,
+      overrideMode: input.overrideMode || 'replace',
+      enabled: input.enabled !== false,
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+
+  async updateSessionSetting(id: string, updates: Partial<SessionSettingInput>): Promise<SessionSetting | null> {
+    const row = this.db.prepare('SELECT * FROM session_settings WHERE id = ?').get(id) as any;
+    if (!row) return null;
+
+    const now = Date.now();
+    const current = this.rowToSessionSetting(row);
+
+    const updated = {
+      ...current,
+      settingValue: updates.settingValue ?? current.settingValue,
+      overrideMode: updates.overrideMode ?? current.overrideMode,
+      enabled: updates.enabled ?? current.enabled,
+      updatedAt: now
+    };
+
+    this.db.prepare(`
+      UPDATE session_settings SET setting_value = ?, override_mode = ?, enabled = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      JSON.stringify(updated.settingValue),
+      updated.overrideMode,
+      updated.enabled ? 1 : 0,
+      now,
+      id
+    );
+
+    return updated;
+  }
+
+  async deleteSessionSetting(id: string): Promise<boolean> {
+    const result = this.db.prepare('DELETE FROM session_settings WHERE id = ?').run(id);
+    return result.changes > 0;
+  }
+
+  async bulkUpsertSessionSettings(sessionId: string, type: SettingType, settings: SessionSettingInput[]): Promise<SessionSetting[]> {
+    const results: SessionSetting[] = [];
+    const now = Date.now();
+
+    for (const input of settings) {
+      // Check if setting exists
+      const existing = await this.getSessionSetting(sessionId, type, input.settingKey);
+
+      if (existing) {
+        // Update existing
+        const updated = await this.updateSessionSetting(existing.id, {
+          settingValue: input.settingValue,
+          overrideMode: input.overrideMode,
+          enabled: input.enabled
+        });
+        if (updated) results.push(updated);
+      } else {
+        // Insert new
+        const created = await this.insertSessionSetting(sessionId, type, input);
+        results.push(created);
+      }
+    }
+
+    return results;
+  }
+
+  private rowToSessionSetting(row: any): SessionSetting {
+    return {
+      id: row.id,
+      sessionId: row.session_id,
+      settingType: row.setting_type as SettingType,
+      settingKey: row.setting_key,
+      settingValue: JSON.parse(row.setting_value),
+      overrideMode: row.override_mode as OverrideMode,
+      enabled: Boolean(row.enabled),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  }
+
+  // Get effective settings by merging project and session settings
+  async getEffectiveSettings(sessionId: string, type?: SettingType): Promise<ProjectSetting[]> {
+    const session = await this.getSession(sessionId);
+    if (!session) return [];
+
+    // Get project settings
+    const projectSettings = await this.getProjectSettings(session.projectId, type);
+
+    // Get session overrides
+    const sessionSettings = await this.getSessionSettings(sessionId, type);
+
+    // Create a map of project settings by type+key
+    const settingsMap = new Map<string, ProjectSetting>();
+    for (const ps of projectSettings) {
+      if (ps.enabled) {
+        settingsMap.set(`${ps.settingType}:${ps.settingKey}`, ps);
+      }
+    }
+
+    // Apply session overrides
+    for (const ss of sessionSettings) {
+      if (!ss.enabled) continue;
+
+      const key = `${ss.settingType}:${ss.settingKey}`;
+      const projectSetting = settingsMap.get(key);
+
+      switch (ss.overrideMode) {
+        case 'replace':
+          // Completely replace project setting or add new
+          settingsMap.set(key, {
+            id: ss.id,
+            projectId: session.projectId,
+            settingType: ss.settingType,
+            settingKey: ss.settingKey,
+            settingValue: ss.settingValue,
+            enabled: true,
+            createdAt: ss.createdAt,
+            updatedAt: ss.updatedAt
+          });
+          break;
+
+        case 'extend':
+          // Merge with project setting
+          if (projectSetting) {
+            settingsMap.set(key, {
+              ...projectSetting,
+              settingValue: this.deepMerge(projectSetting.settingValue, ss.settingValue),
+              updatedAt: ss.updatedAt
+            });
+          } else {
+            // No project setting to extend, just add
+            settingsMap.set(key, {
+              id: ss.id,
+              projectId: session.projectId,
+              settingType: ss.settingType,
+              settingKey: ss.settingKey,
+              settingValue: ss.settingValue,
+              enabled: true,
+              createdAt: ss.createdAt,
+              updatedAt: ss.updatedAt
+            });
+          }
+          break;
+
+        case 'disable':
+          // Remove from effective settings
+          settingsMap.delete(key);
+          break;
+      }
+    }
+
+    return Array.from(settingsMap.values());
+  }
+
+  private deepMerge(target: any, source: any): any {
+    if (Array.isArray(target) && Array.isArray(source)) {
+      return [...target, ...source];
+    }
+    if (typeof target === 'object' && typeof source === 'object') {
+      const result = { ...target };
+      for (const key of Object.keys(source)) {
+        result[key] = this.deepMerge(target[key], source[key]);
+      }
+      return result;
+    }
+    return source;
+  }
+
+  // ============================================
+  // Orphaned Sessions (Unassigned Pool)
+  // ============================================
+
+  async getUnassignedSessions(limit: number = 50): Promise<ProjectSession[]> {
+    // Sessions from auto-created projects (is_manual = false or null) that could be reassigned
+    const rows = this.db.prepare(`
+      SELECT ps.* FROM project_sessions ps
+      INNER JOIN projects p ON ps.project_id = p.id
+      WHERE (p.is_manual = 0 OR p.is_manual IS NULL)
+      ORDER BY ps.started_at DESC
+      LIMIT ?
+    `).all(limit) as any[];
+
+    return rows.map(row => this.rowToSession(row));
+  }
+
+  async assignSessionToProject(sessionId: string, projectId: string): Promise<ProjectSession | null> {
+    // This is essentially reassignment but specifically for orphaned sessions
+    const result = await this.reassignSession(sessionId, projectId);
+    return result.session;
   }
 }

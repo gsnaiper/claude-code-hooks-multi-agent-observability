@@ -101,17 +101,18 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue';
-import type { HookEvent } from '../types';
+import type { EventSummary, EventTimeRange } from '../types';
 import EventRow from './EventRow.vue';
 import { useEventColors } from '../composables/useEventColors';
 import { useEventSearch } from '../composables/useEventSearch';
 
 const props = defineProps<{
-  events: HookEvent[];
+  events: EventSummary[];
   filters: {
     sourceApp: string;
     sessionId: string;
     eventType: string;
+    timeRange: EventTimeRange;
   };
   stickToBottom: boolean;
   uniqueAppNames?: string[]; // Agent IDs (app:session) active in current time window
@@ -142,8 +143,40 @@ const isAgentActive = (agentId: string): boolean => {
   return (props.uniqueAppNames || []).includes(agentId);
 };
 
+// Calculate timestamp threshold for time range filter
+const getTimeRangeThreshold = (timeRange: EventTimeRange): number | null => {
+  const now = Date.now();
+  switch (timeRange) {
+    case 'live':
+      return null; // No time-based filtering for live mode
+    case '1h':
+      return now - 60 * 60 * 1000;
+    case '24h':
+      return now - 24 * 60 * 60 * 1000;
+    case '7d':
+      return now - 7 * 24 * 60 * 60 * 1000;
+    case '30d':
+      return now - 30 * 24 * 60 * 60 * 1000;
+    case 'all':
+    case 'custom':
+      return null; // No time-based filtering
+    default:
+      return null;
+  }
+};
+
 const filteredEvents = computed(() => {
+  const timeThreshold = getTimeRangeThreshold(props.filters.timeRange);
+
   let filtered = props.events.filter(event => {
+    // Guard against undefined/null events
+    if (!event || !event.id) {
+      return false;
+    }
+    // Time range filter
+    if (timeThreshold && event.timestamp < timeThreshold) {
+      return false;
+    }
     if (props.filters.sourceApp && event.source_app !== props.filters.sourceApp) {
       return false;
     }

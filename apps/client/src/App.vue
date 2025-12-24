@@ -219,7 +219,7 @@
 
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue';
-import type { TimeRange, HookEvent } from './types';
+import type { TimeRange, HookEvent, EventTimeRange } from './types';
 import { useWebSocket } from './composables/useWebSocket';
 import { useThemes } from './composables/useThemes';
 import { useEventColors } from './composables/useEventColors';
@@ -313,10 +313,16 @@ watch(events, (newEvents) => {
 }, { deep: true });
 
 // Filters
-const filters = ref({
+const filters = ref<{
+  sourceApp: string;
+  sessionId: string;
+  eventType: string;
+  timeRange: EventTimeRange;
+}>({
   sourceApp: '',
   sessionId: '',
-  eventType: ''
+  eventType: '',
+  timeRange: 'live'
 });
 
 // UI state

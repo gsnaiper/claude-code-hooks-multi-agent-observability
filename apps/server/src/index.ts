@@ -5,6 +5,8 @@ import {
   getRecentEvents,
   getEventsBySessionId,
   updateEventHITLResponse,
+  getEventSummaries,
+  getEventById,
   insertAudioCache,
   getAudioCacheByKey,
   getAudioCacheStats,
@@ -33,9 +35,28 @@ import {
   // Session updates
   updateSession,
   // Backfill
-  backfillSessionMetadata
+  backfillSessionMetadata,
+  // Repository management
+  getProjectRepositories,
+  getRepository,
+  insertRepository,
+  updateRepository,
+  deleteRepository,
+  setPrimaryRepository,
+  // Session settings
+  getSessionSettings,
+  getSessionSetting,
+  insertSessionSetting,
+  updateSessionSetting,
+  deleteSessionSetting,
+  bulkUpsertSessionSettings,
+  getEffectiveSettings,
+  // Orphaned sessions
+  getUnassignedSessions,
+  assignSessionToProject
 } from './db';
-import type { HookEvent, HumanInTheLoopResponse, Project, ProjectSearchQuery, SettingType, ProjectSettingInput } from './types';
+import type { HookEvent, HumanInTheLoopResponse, Project, ProjectSearchQuery, SettingType, ProjectSettingInput, RepositoryInput, SessionSettingInput, EventFilters, TimeRange } from './types';
+import { toEventSummary } from './types';
 import {
   createTheme,
   updateThemeById,
@@ -47,6 +68,56 @@ import {
   getThemeStats
 } from './theme';
 import { EmbeddingQueue, extractSearchableContent } from './vector';
+
+// ============================================
+// Input Validation Helpers
+// ============================================
+
+/**
+ * Validates an ID parameter to prevent path traversal and injection attacks.
+ * Valid IDs contain only alphanumeric characters, colons, underscores, hyphens, and dots.
+ */
+function isValidId(id: string): boolean {
+  if (!id || id.length === 0 || id.length > 256) return false;
+  // Allow alphanumeric, colons (for source_app:session_id), underscores, hyphens, dots
+  // Explicitly disallow path separators and SQL injection characters
+  return /^[a-zA-Z0-9:_.\-]+$/.test(id);
+}
+
+/**
+ * Validates a setting type parameter.
+ */
+const VALID_SETTING_TYPES = ['skills', 'agents', 'commands', 'permissions', 'hooks', 'output_styles'];
+function isValidSettingType(type: string): type is SettingType {
+  return VALID_SETTING_TYPES.includes(type);
+}
+
+/**
+ * Safely decodes and validates an ID from URL path.
+ * Returns null if the ID is invalid or potentially malicious.
+ */
+function safeDecodeId(encoded: string | undefined): string | null {
+  if (!encoded) return null;
+  try {
+    const decoded = decodeURIComponent(encoded);
+    return isValidId(decoded) ? decoded : null;
+  } catch {
+    return null; // Invalid encoding
+  }
+}
+
+/**
+ * Creates a standardized API error response.
+ */
+function apiError(message: string, status: number, headers: Record<string, string>): Response {
+  return new Response(JSON.stringify({
+    success: false,
+    error: message
+  }), {
+    status,
+    headers: { ...headers, 'Content-Type': 'application/json' }
+  });
+}
 
 // Initialize database (async)
 await initDatabase();
@@ -252,8 +323,9 @@ const server = Bun.serve({
           );
         }
 
-        // Broadcast to all WebSocket clients
-        const message = JSON.stringify({ type: 'event', data: savedEvent });
+        // Broadcast to all WebSocket clients (use summary for performance)
+        const eventSummary = toEventSummary(savedEvent);
+        const message = JSON.stringify({ type: 'event', data: eventSummary });
         wsClients.forEach(client => {
           try {
             client.send(message);
@@ -262,7 +334,7 @@ const server = Bun.serve({
             wsClients.delete(client);
           }
         });
-        
+
         return new Response(JSON.stringify(savedEvent), {
           headers: { ...headers, 'Content-Type': 'application/json' }
         });
@@ -283,11 +355,60 @@ const server = Bun.serve({
       });
     }
 
-    // GET /events/recent - Get recent events
+    // GET /events/recent - Get recent events (DEPRECATED - use /events/summaries for better performance)
     if (url.pathname === '/events/recent' && req.method === 'GET') {
       const limit = parseInt(url.searchParams.get('limit') || '300');
       const events = await getRecentEvents(limit);
       return new Response(JSON.stringify(events), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // GET /events/summaries - Get lightweight event summaries with filters
+    if (url.pathname === '/events/summaries' && req.method === 'GET') {
+      const filters: EventFilters = {
+        timeRange: (url.searchParams.get('timeRange') as TimeRange) || undefined,
+        from: url.searchParams.get('from') ? parseInt(url.searchParams.get('from')!) : undefined,
+        to: url.searchParams.get('to') ? parseInt(url.searchParams.get('to')!) : undefined,
+        source_app: url.searchParams.get('source_app') || undefined,
+        session_id: url.searchParams.get('session_id') || undefined,
+        hook_event_type: url.searchParams.get('type') || undefined,
+        limit: url.searchParams.get('limit') ? parseInt(url.searchParams.get('limit')!) : 300,
+        offset: url.searchParams.get('offset') ? parseInt(url.searchParams.get('offset')!) : 0
+      };
+
+      const summaries = await getEventSummaries(filters);
+      return new Response(JSON.stringify({
+        success: true,
+        data: summaries,
+        meta: {
+          count: summaries.length,
+          filters
+        }
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // GET /events/:id - Get full event detail by ID
+    if (url.pathname.match(/^\/events\/\d+$/) && req.method === 'GET') {
+      const id = parseInt(url.pathname.split('/')[2]);
+      const event = await getEventById(id);
+
+      if (!event) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Event not found'
+        }), {
+          status: 404,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      return new Response(JSON.stringify({
+        success: true,
+        data: event
+      }), {
         headers: { ...headers, 'Content-Type': 'application/json' }
       });
     }
@@ -323,8 +444,9 @@ const server = Bun.serve({
           }
         }
 
-        // Broadcast updated event to all connected clients
-        const message = JSON.stringify({ type: 'event', data: updatedEvent });
+        // Broadcast updated event to all connected clients (use summary for performance)
+        const updatedSummary = toEventSummary(updatedEvent);
+        const message = JSON.stringify({ type: 'event', data: updatedSummary });
         wsClients.forEach(client => {
           try {
             client.send(message);
@@ -881,7 +1003,8 @@ const server = Bun.serve({
     }
 
     // GET /api/sessions/:id - Get session details
-    if (url.pathname.match(/^\/api\/sessions\/[^\/]+$/) && req.method === 'GET') {
+    // Note: negative lookahead excludes literal paths like /unassigned and /backfill-metadata
+    if (url.pathname.match(/^\/api\/sessions\/(?!unassigned$|backfill-metadata$)[^\/]+$/) && req.method === 'GET') {
       const pathParts = url.pathname.split('/');
       const id = pathParts[3] ? decodeURIComponent(pathParts[3]) : '';
       if (!id) {
@@ -1124,6 +1247,344 @@ const server = Bun.serve({
       });
     }
 
+    // ============= REPOSITORY API =============
+
+    // GET /api/projects/:id/repositories - Get all repositories for a project
+    if (url.pathname.match(/^\/api\/projects\/[^\/]+\/repositories$/) && req.method === 'GET') {
+      const pathParts = url.pathname.split('/');
+      const projectId = safeDecodeId(pathParts[3]);
+
+      if (!projectId) {
+        return apiError('Invalid or missing Project ID', 400, headers);
+      }
+
+      const repos = await getProjectRepositories(projectId);
+      return new Response(JSON.stringify({
+        success: true,
+        data: repos
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // POST /api/projects/:id/repositories - Add a repository to a project
+    if (url.pathname.match(/^\/api\/projects\/[^\/]+\/repositories$/) && req.method === 'POST') {
+      const pathParts = url.pathname.split('/');
+      const projectId = safeDecodeId(pathParts[3]);
+
+      if (!projectId) {
+        return apiError('Invalid or missing Project ID', 400, headers);
+      }
+
+      try {
+        const body = await req.json() as RepositoryInput;
+        if (!body.name || !isValidId(body.name)) {
+          return apiError('Valid repository name is required', 400, headers);
+        }
+
+        const repo = await insertRepository(projectId, body);
+        return new Response(JSON.stringify({
+          success: true,
+          data: repo
+        }), {
+          status: 201,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('Error adding repository:', error);
+        return apiError('Failed to add repository', 400, headers);
+      }
+    }
+
+    // PUT /api/projects/:id/repositories/:repoId - Update a repository
+    if (url.pathname.match(/^\/api\/projects\/[^\/]+\/repositories\/[^\/]+$/) && req.method === 'PUT') {
+      const pathParts = url.pathname.split('/');
+      const projectId = safeDecodeId(pathParts[3]);
+      const repoId = safeDecodeId(pathParts[5]);
+
+      if (!projectId || !repoId) {
+        return apiError('Invalid or missing Project ID and Repository ID', 400, headers);
+      }
+
+      try {
+        const body = await req.json() as Partial<RepositoryInput>;
+        const repo = await updateRepository(repoId, body);
+
+        if (!repo) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Repository not found'
+          }), {
+            status: 404,
+            headers: { ...headers, 'Content-Type': 'application/json' }
+          });
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: repo
+        }), {
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('Error updating repository:', error);
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Failed to update repository'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // DELETE /api/projects/:id/repositories/:repoId - Delete a repository
+    if (url.pathname.match(/^\/api\/projects\/[^\/]+\/repositories\/[^\/]+$/) && req.method === 'DELETE') {
+      const pathParts = url.pathname.split('/');
+      const projectId = safeDecodeId(pathParts[3]);
+      const repoId = safeDecodeId(pathParts[5]);
+
+      if (!projectId || !repoId) {
+        return apiError('Invalid or missing Project ID and Repository ID', 400, headers);
+      }
+
+      const success = await deleteRepository(repoId);
+      if (!success) {
+        return apiError('Repository not found', 404, headers);
+      }
+
+      return new Response(JSON.stringify({
+        success: true,
+        message: 'Repository deleted'
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // PUT /api/projects/:id/repositories/:repoId/primary - Set as primary repository
+    if (url.pathname.match(/^\/api\/projects\/[^\/]+\/repositories\/[^\/]+\/primary$/) && req.method === 'PUT') {
+      const pathParts = url.pathname.split('/');
+      const projectId = safeDecodeId(pathParts[3]);
+      const repoId = safeDecodeId(pathParts[5]);
+
+      if (!projectId || !repoId) {
+        return apiError('Invalid or missing Project ID and Repository ID', 400, headers);
+      }
+
+      const success = await setPrimaryRepository(projectId, repoId);
+      if (!success) {
+        return apiError('Repository not found or does not belong to this project', 404, headers);
+      }
+
+      return new Response(JSON.stringify({
+        success: true,
+        message: 'Repository set as primary'
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // ============= SESSION SETTINGS API =============
+
+    // GET /api/sessions/:id/settings - Get effective settings (merged project + session)
+    if (url.pathname.match(/^\/api\/sessions\/[^\/]+\/settings$/) && req.method === 'GET') {
+      const pathParts = url.pathname.split('/');
+      const sessionId = safeDecodeId(pathParts[3]);
+      const typeParam = url.searchParams.get('type');
+      const type = typeParam && isValidSettingType(typeParam) ? typeParam : undefined;
+
+      if (!sessionId) {
+        return apiError('Invalid or missing Session ID', 400, headers);
+      }
+
+      const settings = await getEffectiveSettings(sessionId, type || undefined);
+      return new Response(JSON.stringify({
+        success: true,
+        data: settings
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // GET /api/sessions/:id/settings/overrides - Get only session-level overrides
+    if (url.pathname.match(/^\/api\/sessions\/[^\/]+\/settings\/overrides$/) && req.method === 'GET') {
+      const pathParts = url.pathname.split('/');
+      const sessionId = safeDecodeId(pathParts[3]);
+      const typeParam = url.searchParams.get('type');
+      const type = typeParam && isValidSettingType(typeParam) ? typeParam : undefined;
+
+      if (!sessionId) {
+        return apiError('Invalid or missing Session ID', 400, headers);
+      }
+
+      const overrides = await getSessionSettings(sessionId, type);
+      return new Response(JSON.stringify({
+        success: true,
+        data: overrides
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // POST /api/sessions/:id/settings/:type - Bulk upsert session settings
+    if (url.pathname.match(/^\/api\/sessions\/[^\/]+\/settings\/[^\/]+$/) && req.method === 'POST') {
+      const pathParts = url.pathname.split('/');
+      const sessionId = safeDecodeId(pathParts[3]);
+      const settingTypeRaw = pathParts[5] ? decodeURIComponent(pathParts[5]) : '';
+
+      if (!sessionId) {
+        return apiError('Invalid or missing Session ID', 400, headers);
+      }
+
+      if (!isValidSettingType(settingTypeRaw)) {
+        return apiError('Invalid setting type', 400, headers);
+      }
+
+      try {
+        const body = await req.json() as { settings: SessionSettingInput[] };
+        if (!body.settings || !Array.isArray(body.settings)) {
+          return apiError('Settings array is required', 400, headers);
+        }
+
+        const results = await bulkUpsertSessionSettings(sessionId, settingTypeRaw, body.settings);
+        return new Response(JSON.stringify({
+          success: true,
+          data: results
+        }), {
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('Error upserting session settings:', error);
+        return apiError('Invalid request body', 400, headers);
+      }
+    }
+
+    // PUT /api/sessions/:id/settings/:type/:key - Update a specific session setting
+    if (url.pathname.match(/^\/api\/sessions\/[^\/]+\/settings\/[^\/]+\/[^\/]+$/) && req.method === 'PUT') {
+      const pathParts = url.pathname.split('/');
+      const sessionId = safeDecodeId(pathParts[3]);
+      const settingTypeRaw = pathParts[5] ? decodeURIComponent(pathParts[5]) : '';
+      const settingKey = safeDecodeId(pathParts[6]);
+
+      if (!sessionId || !settingKey) {
+        return apiError('Invalid or missing Session ID and setting key', 400, headers);
+      }
+
+      if (!isValidSettingType(settingTypeRaw)) {
+        return apiError('Invalid setting type', 400, headers);
+      }
+
+      try {
+        const body = await req.json() as SessionSettingInput;
+        const existing = await getSessionSetting(sessionId, settingTypeRaw, settingKey);
+
+        let result;
+        if (existing) {
+          result = await updateSessionSetting(existing.id, body);
+        } else {
+          result = await insertSessionSetting(sessionId, settingTypeRaw, {
+            settingKey,
+            settingValue: body.settingValue,
+            overrideMode: body.overrideMode || 'replace',
+            enabled: body.enabled
+          });
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: result
+        }), {
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('Error updating session setting:', error);
+        return apiError('Invalid request body', 400, headers);
+      }
+    }
+
+    // DELETE /api/sessions/:id/settings/:type/:key - Delete a session setting override
+    if (url.pathname.match(/^\/api\/sessions\/[^\/]+\/settings\/[^\/]+\/[^\/]+$/) && req.method === 'DELETE') {
+      const pathParts = url.pathname.split('/');
+      const sessionId = safeDecodeId(pathParts[3]);
+      const settingTypeRaw = pathParts[5] ? decodeURIComponent(pathParts[5]) : '';
+      const settingKey = safeDecodeId(pathParts[6]);
+
+      if (!sessionId || !settingKey) {
+        return apiError('Invalid or missing Session ID and setting key', 400, headers);
+      }
+
+      if (!isValidSettingType(settingTypeRaw)) {
+        return apiError('Invalid setting type', 400, headers);
+      }
+
+      const existing = await getSessionSetting(sessionId, settingTypeRaw, settingKey);
+      if (!existing) {
+        return apiError('Session setting not found', 404, headers);
+      }
+
+      await deleteSessionSetting(existing.id);
+      return new Response(JSON.stringify({
+        success: true,
+        message: 'Session setting deleted'
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // ============= ORPHANED SESSIONS API =============
+
+    // GET /api/sessions/unassigned - Get sessions from auto-created projects
+    if (url.pathname === '/api/sessions/unassigned' && req.method === 'GET') {
+      const sessions = await getUnassignedSessions();
+      return new Response(JSON.stringify({
+        success: true,
+        data: sessions
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // POST /api/sessions/:id/assign - Assign an orphaned session to a project
+    if (url.pathname.match(/^\/api\/sessions\/[^\/]+\/assign$/) && req.method === 'POST') {
+      const pathParts = url.pathname.split('/');
+      const sessionId = safeDecodeId(pathParts[3]);
+
+      if (!sessionId) {
+        return apiError('Invalid or missing Session ID', 400, headers);
+      }
+
+      try {
+        const body = await req.json() as { projectId: string };
+        const projectId = body.projectId && isValidId(body.projectId) ? body.projectId : null;
+
+        if (!projectId) {
+          return apiError('Valid target project ID is required', 400, headers);
+        }
+
+        const session = await assignSessionToProject(sessionId, projectId);
+        if (!session) {
+          return apiError('Session not found or assignment failed', 404, headers);
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: session,
+          message: `Session assigned to project ${projectId}`
+        }), {
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('Error assigning session:', error);
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Failed to assign session'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
     // ============= SESSION REASSIGNMENT API =============
 
     // PUT /api/sessions/:id/reassign - Reassign session to a different project
@@ -1288,9 +1749,9 @@ const server = Bun.serve({
       console.log('WebSocket client connected');
       wsClients.add(ws);
 
-      // Send recent events on connection
-      const events = await getRecentEvents(300);
-      ws.send(JSON.stringify({ type: 'initial', data: events }));
+      // Send recent event summaries on connection (lightweight, no payload)
+      const summaries = await getEventSummaries({ limit: 300 });
+      ws.send(JSON.stringify({ type: 'initial', data: summaries }));
     },
     
     message(ws, message) {

@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div v-if="event">
     <!-- HITL Question Section (NEW) -->
     <div
       v-if="event.humanInTheLoop && (event.humanInTheLoopStatus?.status === 'pending' || hasSubmittedResponse)"
@@ -452,11 +452,21 @@
               <span>{{ copyButtonText }}</span>
             </button>
           </div>
-          <pre class="text-sm mobile:text-xs text-[var(--theme-text-primary)] bg-[var(--theme-bg-tertiary)] p-3 mobile:p-2 rounded-lg overflow-x-auto max-h-64 overflow-y-auto font-mono border border-[var(--theme-primary)]/30 shadow-md hover:shadow-lg transition-shadow duration-200">{{ formattedPayload }}</pre>
+          <!-- Loading indicator -->
+          <div v-if="isLoadingPayload" class="flex items-center justify-center p-4 text-[var(--theme-text-secondary)]">
+            <span class="animate-spin mr-2">⏳</span>
+            Loading payload...
+          </div>
+          <!-- Error message -->
+          <div v-else-if="detailLoadError" class="p-3 text-red-500 bg-red-50 dark:bg-red-900/20 rounded-lg">
+            {{ detailLoadError }}
+          </div>
+          <!-- Payload content -->
+          <pre v-else class="text-sm mobile:text-xs text-[var(--theme-text-primary)] bg-[var(--theme-bg-tertiary)] p-3 mobile:p-2 rounded-lg overflow-x-auto max-h-64 overflow-y-auto font-mono border border-[var(--theme-primary)]/30 shadow-md hover:shadow-lg transition-shadow duration-200">{{ formattedPayload }}</pre>
         </div>
-        
-        <!-- Chat transcript button -->
-        <div v-if="event.chat && event.chat.length > 0" class="flex justify-end">
+
+        <!-- Chat transcript button (only visible when full event is loaded) -->
+        <div v-if="fullEvent?.chat && fullEvent.chat.length > 0" class="flex justify-end">
           <button
             @click.stop="!isMobile && (showChatModal = true)"
             :class="[
@@ -469,7 +479,7 @@
           >
             <span class="text-base mobile:text-sm">💬</span>
             <span class="text-sm mobile:text-xs font-bold drop-shadow-sm">
-              {{ isMobile ? 'Not available in mobile' : `View Chat Transcript (${event.chat.length} messages)` }}
+              {{ isMobile ? 'Not available in mobile' : `View Chat Transcript (${fullEvent?.chat?.length || 0} messages)` }}
             </span>
           </button>
         </div>
@@ -478,9 +488,9 @@
     </div>
     <!-- Chat Modal -->
     <ChatTranscriptModal
-      v-if="event.chat && event.chat.length > 0"
+      v-if="fullEvent?.chat && fullEvent.chat.length > 0"
       :is-open="showChatModal"
-      :chat="event.chat"
+      :chat="fullEvent.chat"
       @close="showChatModal = false"
     />
   </div>
@@ -488,21 +498,27 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
-import type { HookEvent, HumanInTheLoopResponse } from '../types';
+import type { EventSummary, HookEvent, HumanInTheLoopResponse } from '../types';
 import { useMediaQuery } from '../composables/useMediaQuery';
 import { useVoiceInput } from '../composables/useVoiceInput';
 import { useVoiceNotifications } from '../composables/useVoiceNotifications';
+import { useEventDetail } from '../composables/useEventDetail';
 import ChatTranscriptModal from './ChatTranscriptModal.vue';
 import { API_BASE_URL } from '../config';
 
 const props = defineProps<{
-  event: HookEvent;
+  event: EventSummary;
   gradientClass: string;
   colorClass: string;
   appGradientClass: string;
   appColorClass: string;
   appHexColor: string;
 }>();
+
+// Event detail loading
+const { fetchEventDetail, isLoading: isLoadingDetail, getCached } = useEventDetail();
+const fullEvent = ref<HookEvent | null>(null);
+const detailLoadError = ref<string | null>(null);
 
 const emit = defineEmits<{
   (e: 'response-submitted', response: HumanInTheLoopResponse): void;
@@ -550,15 +566,28 @@ const toggleApprovalVoiceInput = async () => {
   await toggleRecording('ru-RU');
 };
 
-const toggleExpanded = () => {
+const toggleExpanded = async () => {
   isExpanded.value = !isExpanded.value;
+
+  // Fetch full event detail when expanding (if not already loaded)
+  if (isExpanded.value && !fullEvent.value && props.event.id) {
+    detailLoadError.value = null;
+    const detail = await fetchEventDetail(props.event.id);
+    if (detail) {
+      fullEvent.value = detail;
+    } else {
+      detailLoadError.value = 'Failed to load event details';
+    }
+  }
 };
 
 const sessionIdShort = computed(() => {
+  if (!props.event?.session_id) return '';
   return props.event.session_id.slice(0, 8);
 });
 
 const hookEmoji = computed(() => {
+  if (!props.event?.hook_event_type) return '❓';
   const emojiMap: Record<string, string> = {
     'PreToolUse': '🔧',
     'PostToolUse': '✅',
@@ -593,60 +622,50 @@ const appBgStyle = computed(() => {
 });
 
 const formattedPayload = computed(() => {
-  return JSON.stringify(props.event.payload, null, 2);
+  if (fullEvent.value) {
+    return JSON.stringify(fullEvent.value.payload, null, 2);
+  }
+  return '{ "loading": true }';
+});
+
+const isLoadingPayload = computed(() => {
+  if (!props.event?.id) return false;
+  return isExpanded.value && !fullEvent.value && isLoadingDetail(props.event.id);
 });
 
 const toolInfo = computed(() => {
-  const payload = props.event.payload;
-  
-  // Handle UserPromptSubmit events
-  if (props.event.hook_event_type === 'UserPromptSubmit' && payload.prompt) {
-    return {
-      tool: 'Prompt:',
-      detail: `"${payload.prompt.slice(0, 100)}${payload.prompt.length > 100 ? '...' : ''}"`
-    };
+  // Guard against undefined event during Vue reactivity updates
+  if (!props.event) return null;
+
+  // Use extracted fields from EventSummary for list view
+  const { tool_name, tool_command, tool_file_path, hook_event_type } = props.event;
+
+  // Handle special event types (simplified display without full payload)
+  if (hook_event_type === 'UserPromptSubmit') {
+    return { tool: 'Prompt:', detail: '(user input)' };
   }
-  
-  // Handle PreCompact events
-  if (props.event.hook_event_type === 'PreCompact') {
-    const trigger = payload.trigger || 'unknown';
-    return {
-      tool: 'Compaction:',
-      detail: trigger === 'manual' ? 'Manual compaction' : 'Auto-compaction (full context)'
-    };
+
+  if (hook_event_type === 'PreCompact') {
+    return { tool: 'Compaction:', detail: 'context compaction' };
   }
-  
-  // Handle SessionStart events
-  if (props.event.hook_event_type === 'SessionStart') {
-    const source = payload.source || 'unknown';
-    const sourceLabels: Record<string, string> = {
-      'startup': 'New session',
-      'resume': 'Resuming session',
-      'clear': 'Fresh session'
-    };
-    return {
-      tool: 'Session:',
-      detail: sourceLabels[source] || source
-    };
+
+  if (hook_event_type === 'SessionStart') {
+    return { tool: 'Session:', detail: 'started' };
   }
-  
-  // Handle tool-based events
-  if (payload.tool_name) {
-    const info: { tool: string; detail?: string } = { tool: payload.tool_name };
-    
-    if (payload.tool_input) {
-      if (payload.tool_input.command) {
-        info.detail = payload.tool_input.command.slice(0, 50) + (payload.tool_input.command.length > 50 ? '...' : '');
-      } else if (payload.tool_input.file_path) {
-        info.detail = payload.tool_input.file_path.split('/').pop();
-      } else if (payload.tool_input.pattern) {
-        info.detail = payload.tool_input.pattern;
-      }
+
+  // Handle tool-based events using extracted fields
+  if (tool_name) {
+    const info: { tool: string; detail?: string } = { tool: tool_name };
+
+    if (tool_command) {
+      info.detail = tool_command.slice(0, 50) + (tool_command.length > 50 ? '...' : '');
+    } else if (tool_file_path) {
+      info.detail = tool_file_path.split('/').pop();
     }
-    
+
     return info;
   }
-  
+
   return null;
 });
 
@@ -689,26 +708,33 @@ const copyPayload = async () => {
 // New computed properties for HITL
 const hitlTypeEmoji = computed(() => {
   if (!props.event.humanInTheLoop) return '';
-  const emojiMap = {
+  const emojiMap: Record<string, string> = {
     question: '❓',
     permission: '🔐',
-    choice: '🎯'
+    choice: '🎯',
+    approval: '✅',
+    question_input: '💬'
   };
   return emojiMap[props.event.humanInTheLoop.type] || '❓';
 });
 
 const hitlTypeLabel = computed(() => {
   if (!props.event.humanInTheLoop) return '';
-  const labelMap = {
+  const labelMap: Record<string, string> = {
     question: 'Agent Question',
     permission: 'Permission Request',
-    choice: 'Choice Required'
+    choice: 'Choice Required',
+    approval: 'Approval Required',
+    question_input: 'Input Required'
   };
   return labelMap[props.event.humanInTheLoop.type] || 'Question';
 });
 
 const permissionType = computed(() => {
-  return props.event.payload?.permission_type || null;
+  // Try to get permission_type from HITL context or full event
+  return props.event.humanInTheLoop?.context?.permission_type
+    || fullEvent.value?.payload?.permission_type
+    || null;
 });
 
 // Methods for HITL responses
@@ -906,10 +932,10 @@ const hasAudio = computed(() => {
   // Events with summary
   if (props.event.summary) return true;
 
-  // Git commit events
+  // Git commit events (using extracted fields from EventSummary)
   if (props.event.hook_event_type === 'PostToolUse') {
-    const command = props.event.payload?.tool_input?.command || '';
-    if (props.event.payload?.tool_name === 'Bash' && command.includes('git commit')) {
+    const command = props.event.tool_command || '';
+    if (props.event.tool_name === 'Bash' && command.includes('git commit')) {
       return true;
     }
   }
@@ -936,10 +962,10 @@ const getEventAudioText = (): string | null => {
     return props.event.summary;
   }
 
-  // Git commit
+  // Git commit (using extracted command from EventSummary)
   if (props.event.hook_event_type === 'PostToolUse') {
-    const command = props.event.payload?.tool_input?.command || '';
-    if (props.event.payload?.tool_name === 'Bash' && command.includes('git commit')) {
+    const command = props.event.tool_command || '';
+    if (props.event.tool_name === 'Bash' && command.includes('git commit')) {
       // Extract commit message using same logic as useVoiceNotifications
       const heredocMatch = command.match(/git commit.*-m\s*"\$\(cat\s*<<['"]?EOF['"]?\s*\n([\s\S]*?)\n\s*EOF/);
       if (heredocMatch) {

@@ -1,8 +1,8 @@
 import { ref, onMounted, onUnmounted } from 'vue';
-import type { HookEvent, WebSocketMessage } from '../types';
+import type { EventSummary, WebSocketMessage } from '../types';
 
 export function useWebSocket(url: string) {
-  const events = ref<HookEvent[]>([]);
+  const events = ref<EventSummary[]>([]);
   const isConnected = ref(false);
   const error = ref<string | null>(null);
   
@@ -27,17 +27,22 @@ export function useWebSocket(url: string) {
           const message: WebSocketMessage = JSON.parse(event.data);
           
           if (message.type === 'initial') {
-            const initialEvents = Array.isArray(message.data) ? message.data : [];
-            // Only keep the most recent events up to maxEvents
-            events.value = initialEvents.slice(-maxEvents);
+            const initialEvents = (Array.isArray(message.data) ? message.data : []) as EventSummary[];
+            // Filter valid events and keep only the most recent up to maxEvents
+            events.value = initialEvents
+              .filter(e => e && e.id)
+              .slice(-maxEvents);
           } else if (message.type === 'event') {
-            const newEvent = message.data as HookEvent;
-            events.value.push(newEvent);
-            
-            // Limit events array to maxEvents, removing the oldest when exceeded
-            if (events.value.length > maxEvents) {
-              // Remove the oldest events (first 10) when limit is exceeded
-              events.value = events.value.slice(events.value.length - maxEvents + 10);
+            const newEvent = message.data as EventSummary;
+            // Only add if event has valid id
+            if (newEvent && newEvent.id) {
+              events.value.push(newEvent);
+
+              // Limit events array to maxEvents, removing oldest in-place with splice
+              if (events.value.length > maxEvents) {
+                // Remove the oldest 10 events in-place
+                events.value.splice(0, 10);
+              }
             }
           }
         } catch (err) {

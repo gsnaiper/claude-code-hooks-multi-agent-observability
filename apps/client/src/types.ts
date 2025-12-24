@@ -17,7 +17,7 @@ export interface HumanInTheLoopResponse {
   approved?: boolean; // For 'approval' type - whether action was approved
   comment?: string; // Optional comment for approval/denial
   cancelled?: boolean; // For 'question_input' type - whether user cancelled
-  hookEvent: HookEvent;
+  hookEvent: HookEvent | EventSummary; // Can be full event or summary
   respondedAt: number;
   respondedBy?: string; // Optional user identifier
 }
@@ -56,6 +56,43 @@ export interface HookEvent {
   humanInTheLoopStatus?: HumanInTheLoopStatus;
 }
 
+// Lightweight event summary for list view (no payload/chat)
+export interface EventSummary {
+  id: number;
+  source_app: string;
+  session_id: string;
+  hook_event_type: string;
+  timestamp: number;
+  model_name?: string;
+  summary?: string;
+  project_id?: string;
+  // Extracted from payload for display:
+  tool_name?: string;
+  tool_command?: string;
+  tool_file_path?: string;
+  // HITL flags:
+  has_hitl: boolean;
+  hitl_type?: string;
+  hitl_status?: 'pending' | 'responded';
+  // Optional full HITL data for real-time events
+  humanInTheLoop?: HumanInTheLoop;
+  humanInTheLoopStatus?: HumanInTheLoopStatus;
+}
+
+// Time range filter for events
+export type EventTimeRange = 'live' | '1h' | '24h' | '7d' | '30d' | 'all' | 'custom';
+
+export interface EventFilters {
+  timeRange?: EventTimeRange;
+  from?: number;
+  to?: number;
+  source_app?: string;
+  session_id?: string;
+  hook_event_type?: string;
+  limit?: number;
+  offset?: number;
+}
+
 export interface FilterOptions {
   source_apps: string[];
   session_ids: string[];
@@ -64,7 +101,7 @@ export interface FilterOptions {
 
 export interface WebSocketMessage {
   type: 'initial' | 'event' | 'hitl_response';
-  data: HookEvent | HookEvent[] | HumanInTheLoopResponse;
+  data: EventSummary | EventSummary[] | HookEvent | HookEvent[] | HumanInTheLoopResponse;
 }
 
 export type TimeRange = '1m' | '3m' | '5m' | '10m';
@@ -102,6 +139,28 @@ export interface Project {
   lastActivityAt?: number;
   status: 'active' | 'archived' | 'paused';
   metadata?: Record<string, unknown>;
+  isManual?: boolean;            // true if manually created, false if auto-registered
+  repositories?: Repository[];   // multi-repo support
+}
+
+// Repository interface for multi-repo projects
+export interface Repository {
+  id: string;
+  projectId: string;
+  name: string;
+  gitRemoteUrl?: string;
+  localPath?: string;
+  gitBranch?: string;
+  isPrimary: boolean;
+  createdAt: number;
+}
+
+export interface RepositoryInput {
+  name: string;
+  gitRemoteUrl?: string;
+  localPath?: string;
+  gitBranch?: string;
+  isPrimary?: boolean;
 }
 
 export interface ProjectSession {
@@ -193,4 +252,26 @@ export interface ApiResponse<T = any> {
 export interface ReassignSessionResult {
   session: ProjectSession;
   movedEvents: number;
+}
+
+// Session Settings with inheritance
+export type OverrideMode = 'replace' | 'extend' | 'disable';
+
+export interface SessionSetting {
+  id: string;
+  sessionId: string;
+  settingType: SettingType;
+  settingKey: string;
+  settingValue: Record<string, any>;
+  overrideMode: OverrideMode;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SessionSettingInput {
+  settingKey: string;
+  settingValue: Record<string, any>;
+  overrideMode?: OverrideMode;
+  enabled?: boolean;
 }

@@ -7,6 +7,8 @@
 
 import type {
   HookEvent,
+  EventSummary,
+  EventFilters,
   FilterOptions,
   Theme,
   ThemeSearchQuery,
@@ -15,7 +17,12 @@ import type {
   ProjectSearchQuery,
   ProjectSetting,
   ProjectSettingInput,
-  SettingType
+  SettingType,
+  Repository,
+  RepositoryInput,
+  SessionSetting,
+  SessionSettingInput,
+  OverrideMode
 } from '../types';
 
 /**
@@ -70,6 +77,12 @@ export interface DatabaseAdapter {
 
   /** Update HITL response status for an event */
   updateEventHITLResponse(id: number, response: any): Promise<HookEvent | null>;
+
+  /** Get event summaries (lightweight, no payload/chat) with filters */
+  getEventSummaries(filters?: EventFilters): Promise<EventSummary[]>;
+
+  /** Get single event by ID (full event with payload) */
+  getEventById(id: number): Promise<HookEvent | null>;
 
   // ============================================
   // Theme Operations
@@ -191,4 +204,61 @@ export interface DatabaseAdapter {
 
   /** Backfill session metadata from SessionStart events */
   backfillSessionMetadata(): Promise<{ updated: number; skipped: number }>;
+
+  // ============================================
+  // Repository Operations
+  // ============================================
+
+  /** Get all repositories for a project */
+  getProjectRepositories(projectId: string): Promise<Repository[]>;
+
+  /** Get a specific repository by ID */
+  getRepository(id: string): Promise<Repository | null>;
+
+  /** Insert a new repository */
+  insertRepository(projectId: string, input: RepositoryInput): Promise<Repository>;
+
+  /** Update repository fields */
+  updateRepository(id: string, updates: Partial<RepositoryInput>): Promise<Repository | null>;
+
+  /** Delete a repository */
+  deleteRepository(id: string): Promise<boolean>;
+
+  /** Set primary repository for a project */
+  setPrimaryRepository(projectId: string, repoId: string): Promise<boolean>;
+
+  // ============================================
+  // Session Settings Operations
+  // ============================================
+
+  /** Get all settings for a session, optionally filtered by type */
+  getSessionSettings(sessionId: string, type?: SettingType): Promise<SessionSetting[]>;
+
+  /** Get a specific session setting by session, type, and key */
+  getSessionSetting(sessionId: string, type: SettingType, key: string): Promise<SessionSetting | null>;
+
+  /** Insert a new session setting */
+  insertSessionSetting(sessionId: string, type: SettingType, input: SessionSettingInput): Promise<SessionSetting>;
+
+  /** Update an existing session setting */
+  updateSessionSetting(id: string, updates: Partial<SessionSettingInput>): Promise<SessionSetting | null>;
+
+  /** Delete a session setting */
+  deleteSessionSetting(id: string): Promise<boolean>;
+
+  /** Bulk upsert session settings of a specific type */
+  bulkUpsertSessionSettings(sessionId: string, type: SettingType, settings: SessionSettingInput[]): Promise<SessionSetting[]>;
+
+  /** Get effective settings (project settings merged with session overrides) */
+  getEffectiveSettings(sessionId: string, type?: SettingType): Promise<ProjectSetting[]>;
+
+  // ============================================
+  // Orphaned Sessions Operations
+  // ============================================
+
+  /** Get sessions from auto-created projects (unassigned) */
+  getUnassignedSessions(): Promise<ProjectSession[]>;
+
+  /** Assign an orphaned session to a manually created project */
+  assignSessionToProject(sessionId: string, projectId: string): Promise<ProjectSession | null>;
 }

@@ -1,5 +1,23 @@
 <template>
   <div class="bg-gradient-to-r from-[var(--theme-bg-primary)] to-[var(--theme-bg-secondary)] border-b-2 border-[var(--theme-primary)] px-3 py-4 mobile:py-2 shadow-lg">
+    <!-- Time Range Selector -->
+    <div class="flex flex-wrap gap-1.5 mb-3 mobile:mb-2 items-center">
+      <span class="text-base mobile:text-sm font-bold text-[var(--theme-primary)] mr-2">Time:</span>
+      <button
+        v-for="option in timeRangeOptions"
+        :key="option.value"
+        @click="localFilters.timeRange = option.value; updateFilters()"
+        :class="[
+          'px-3 py-1.5 mobile:px-2 mobile:py-1 text-sm mobile:text-xs font-medium rounded-lg transition-all duration-200 border',
+          localFilters.timeRange === option.value
+            ? 'bg-[var(--theme-primary)] text-white border-[var(--theme-primary)] shadow-lg'
+            : 'bg-[var(--theme-bg-tertiary)] text-[var(--theme-text-secondary)] border-[var(--theme-border-primary)] hover:bg-[var(--theme-bg-secondary)] hover:border-[var(--theme-primary)]'
+        ]"
+      >
+        <span v-if="option.value === 'live' && localFilters.timeRange === 'live'" class="animate-pulse">{{ option.label }}</span>
+        <span v-else>{{ option.label }}</span>
+      </button>
+    </div>
     <div class="flex flex-wrap gap-3 items-center mobile:flex-col mobile:items-stretch">
       <div class="flex-1 min-w-0 mobile:w-full">
         <label class="block text-base mobile:text-sm font-bold text-[var(--theme-primary)] mb-1.5 drop-shadow-sm">
@@ -62,7 +80,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import type { FilterOptions } from '../types';
+import type { FilterOptions, EventTimeRange } from '../types';
 import { API_BASE_URL } from '../config';
 
 const props = defineProps<{
@@ -70,6 +88,7 @@ const props = defineProps<{
     sourceApp: string;
     sessionId: string;
     eventType: string;
+    timeRange: EventTimeRange;
   };
 }>();
 
@@ -85,8 +104,17 @@ const filterOptions = ref<FilterOptions>({
 
 const localFilters = ref({ ...props.filters });
 
+const timeRangeOptions: { value: EventTimeRange; label: string }[] = [
+  { value: 'live', label: '🔴 Live' },
+  { value: '1h', label: '1h' },
+  { value: '24h', label: '24h' },
+  { value: '7d', label: '7d' },
+  { value: '30d', label: '30d' },
+  { value: 'all', label: 'All' }
+];
+
 const hasActiveFilters = computed(() => {
-  return localFilters.value.sourceApp || localFilters.value.sessionId || localFilters.value.eventType;
+  return localFilters.value.sourceApp || localFilters.value.sessionId || localFilters.value.eventType || localFilters.value.timeRange !== 'live';
 });
 
 const updateFilters = () => {
@@ -97,7 +125,8 @@ const clearFilters = () => {
   localFilters.value = {
     sourceApp: '',
     sessionId: '',
-    eventType: ''
+    eventType: '',
+    timeRange: 'live'
   };
   updateFilters();
 };

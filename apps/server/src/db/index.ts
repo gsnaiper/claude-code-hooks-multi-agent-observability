@@ -11,6 +11,8 @@
 import type { DatabaseAdapter, AudioCacheEntry } from './adapter';
 import type {
   HookEvent,
+  EventSummary,
+  EventFilters,
   FilterOptions,
   Theme,
   ThemeSearchQuery,
@@ -19,7 +21,11 @@ import type {
   ProjectSearchQuery,
   ProjectSetting,
   ProjectSettingInput,
-  SettingType
+  SettingType,
+  Repository,
+  RepositoryInput,
+  SessionSetting,
+  SessionSettingInput
 } from '../types';
 import { SqliteAdapter } from './sqlite-adapter';
 import { PostgresAdapter } from './postgres-adapter';
@@ -75,6 +81,14 @@ export function getFilterOptions(): Promise<FilterOptions> {
 
 export function updateEventHITLResponse(id: number, response: any): Promise<HookEvent | null> {
   return adapter.updateEventHITLResponse(id, response);
+}
+
+export function getEventSummaries(filters?: EventFilters): Promise<EventSummary[]> {
+  return adapter.getEventSummaries(filters);
+}
+
+export function getEventById(id: number): Promise<HookEvent | null> {
+  return adapter.getEventById(id);
 }
 
 // ============================================
@@ -227,6 +241,78 @@ export function reassignSession(sessionId: string, newProjectId: string): Promis
 
 export function backfillSessionMetadata(): Promise<{ updated: number; skipped: number }> {
   return adapter.backfillSessionMetadata();
+}
+
+// ============================================
+// Repository Operations
+// ============================================
+
+export function getProjectRepositories(projectId: string): Promise<Repository[]> {
+  return adapter.getProjectRepositories(projectId);
+}
+
+export function getRepository(id: string): Promise<Repository | null> {
+  return adapter.getRepository(id);
+}
+
+export function insertRepository(projectId: string, input: RepositoryInput): Promise<Repository> {
+  return adapter.insertRepository(projectId, input);
+}
+
+export function updateRepository(id: string, updates: Partial<RepositoryInput>): Promise<Repository | null> {
+  return adapter.updateRepository(id, updates);
+}
+
+export function deleteRepository(id: string): Promise<boolean> {
+  return adapter.deleteRepository(id);
+}
+
+export function setPrimaryRepository(projectId: string, repoId: string): Promise<boolean> {
+  return adapter.setPrimaryRepository(projectId, repoId);
+}
+
+// ============================================
+// Session Settings Operations
+// ============================================
+
+export function getSessionSettings(sessionId: string, type?: SettingType): Promise<SessionSetting[]> {
+  return adapter.getSessionSettings(sessionId, type);
+}
+
+export function getSessionSetting(sessionId: string, type: SettingType, key: string): Promise<SessionSetting | null> {
+  return adapter.getSessionSetting(sessionId, type, key);
+}
+
+export function insertSessionSetting(sessionId: string, type: SettingType, input: SessionSettingInput): Promise<SessionSetting> {
+  return adapter.insertSessionSetting(sessionId, type, input);
+}
+
+export function updateSessionSetting(id: string, updates: Partial<SessionSettingInput>): Promise<SessionSetting | null> {
+  return adapter.updateSessionSetting(id, updates);
+}
+
+export function deleteSessionSetting(id: string): Promise<boolean> {
+  return adapter.deleteSessionSetting(id);
+}
+
+export function bulkUpsertSessionSettings(sessionId: string, type: SettingType, settings: SessionSettingInput[]): Promise<SessionSetting[]> {
+  return adapter.bulkUpsertSessionSettings(sessionId, type, settings);
+}
+
+export function getEffectiveSettings(sessionId: string, type?: SettingType): Promise<ProjectSetting[]> {
+  return adapter.getEffectiveSettings(sessionId, type);
+}
+
+// ============================================
+// Orphaned Sessions Operations
+// ============================================
+
+export function getUnassignedSessions(): Promise<ProjectSession[]> {
+  return adapter.getUnassignedSessions();
+}
+
+export function assignSessionToProject(sessionId: string, projectId: string): Promise<ProjectSession | null> {
+  return adapter.assignSessionToProject(sessionId, projectId);
 }
 
 // Re-export types
