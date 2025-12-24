@@ -267,6 +267,32 @@ export function getRecentEvents(limit: number = 300): HookEvent[] {
   })).reverse();
 }
 
+export function getEventsBySessionId(sessionId: string): HookEvent[] {
+  const stmt = db.prepare(`
+    SELECT id, source_app, session_id, hook_event_type, payload, chat, summary, timestamp, humanInTheLoop, humanInTheLoopStatus, model_name, project_id
+    FROM events
+    WHERE session_id = ?
+    ORDER BY timestamp ASC
+  `);
+
+  const rows = stmt.all(sessionId) as any[];
+
+  return rows.map(row => ({
+    id: row.id,
+    source_app: row.source_app,
+    session_id: row.session_id,
+    hook_event_type: row.hook_event_type,
+    payload: JSON.parse(row.payload),
+    chat: row.chat ? JSON.parse(row.chat) : undefined,
+    summary: row.summary || undefined,
+    timestamp: row.timestamp,
+    humanInTheLoop: row.humanInTheLoop ? JSON.parse(row.humanInTheLoop) : undefined,
+    humanInTheLoopStatus: row.humanInTheLoopStatus ? JSON.parse(row.humanInTheLoopStatus) : undefined,
+    model_name: row.model_name || undefined,
+    project_id: row.project_id || undefined
+  }));
+}
+
 // Theme database functions
 export function insertTheme(theme: Theme): Theme {
   const stmt = db.prepare(`

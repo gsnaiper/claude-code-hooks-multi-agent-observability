@@ -114,6 +114,15 @@
             </span>
             <span v-else class="text-green-500">Active</span>
           </div>
+
+          <!-- View Transcript Button -->
+          <button
+            v-if="session.eventCount > 0"
+            @click.stop="openTranscript(session.id)"
+            class="mt-2 px-3 py-1.5 text-xs font-medium bg-[var(--theme-primary)] hover:bg-[var(--theme-primary-dark)] text-white rounded-lg transition-colors"
+          >
+            View Transcript
+          </button>
         </div>
       </div>
     </div>
@@ -194,6 +203,10 @@ function formatModelName(name: string): string {
   if (name.includes('sonnet')) return 'Sonnet'
   if (name.includes('haiku')) return 'Haiku'
   return name.slice(0, 15)
+}
+
+function openTranscript(sessionId: string) {
+  window.open(`/?transcript=${sessionId}`, '_blank')
 }
 
 // Load sessions when project changes

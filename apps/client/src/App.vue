@@ -1,5 +1,9 @@
 <template>
-  <div class="h-screen flex flex-col bg-[var(--theme-bg-secondary)]">
+  <!-- Transcript Page Mode (opened in new window) -->
+  <SessionTranscriptPage v-if="transcriptSessionId" :session-id="transcriptSessionId" />
+
+  <!-- Main App -->
+  <div v-else class="h-screen flex flex-col bg-[var(--theme-bg-secondary)]">
     <!-- Header with Primary Theme Colors -->
     <header class="short:hidden bg-gradient-to-r from-[var(--theme-primary)] to-[var(--theme-primary-light)] shadow-lg border-b-2 border-[var(--theme-primary-dark)]">
       <div class="px-3 py-4 mobile:py-1.5 mobile:px-2 flex items-center justify-between mobile:gap-2">
@@ -230,8 +234,13 @@ import AgentSwimLaneContainer from './components/AgentSwimLaneContainer.vue';
 import VoiceSettingsPanel from './components/VoiceSettingsPanel.vue';
 import ProjectList from './components/ProjectList.vue';
 import ProjectDetail from './components/ProjectDetail.vue';
+import SessionTranscriptPage from './components/SessionTranscriptPage.vue';
 import { WS_URL } from './config';
 import type { Project } from './types';
+
+// Check for transcript mode (opened in new window)
+const urlParams = new URLSearchParams(window.location.search);
+const transcriptSessionId = urlParams.get('transcript');
 
 // WebSocket connection
 const { events, isConnected, error, clearEvents } = useWebSocket(WS_URL);

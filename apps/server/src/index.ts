@@ -3,6 +3,7 @@ import {
   insertEvent,
   getFilterOptions,
   getRecentEvents,
+  getEventsBySessionId,
   updateEventHITLResponse,
   insertAudioCache,
   getAudioCacheByKey,
@@ -852,6 +853,29 @@ const server = Bun.serve({
       return new Response(JSON.stringify({
         success: true,
         data: session
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // GET /api/sessions/:id/events - Get all events for a session
+    if (url.pathname.match(/^\/api\/sessions\/[^\/]+\/events$/) && req.method === 'GET') {
+      const pathParts = url.pathname.split('/');
+      const sessionId = pathParts[3] ? decodeURIComponent(pathParts[3]) : '';
+      if (!sessionId) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Session ID is required'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      const events = getEventsBySessionId(sessionId);
+      return new Response(JSON.stringify({
+        success: true,
+        data: events
       }), {
         headers: { ...headers, 'Content-Type': 'application/json' }
       });
