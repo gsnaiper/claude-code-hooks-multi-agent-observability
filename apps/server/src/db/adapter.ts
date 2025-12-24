@@ -35,6 +35,8 @@ export interface AudioCacheEntry {
 /**
  * Database adapter interface
  * All database implementations must conform to this contract
+ *
+ * Note: All methods are async to support both sync (SQLite) and async (Postgres) adapters
  */
 export interface DatabaseAdapter {
   // ============================================
@@ -42,116 +44,116 @@ export interface DatabaseAdapter {
   // ============================================
 
   /** Initialize database connection and schema */
-  init(): void;
+  init(): Promise<void>;
 
   /** Close database connection */
-  close(): void;
+  close(): Promise<void>;
 
   // ============================================
   // Event Operations
   // ============================================
 
   /** Insert a new hook event */
-  insertEvent(event: HookEvent): HookEvent;
+  insertEvent(event: HookEvent): Promise<HookEvent>;
 
   /** Get recent events (ordered by timestamp DESC, then reversed) */
-  getRecentEvents(limit?: number): HookEvent[];
+  getRecentEvents(limit?: number): Promise<HookEvent[]>;
 
   /** Get all events for a session (ordered by timestamp ASC) */
-  getEventsBySessionId(sessionId: string): HookEvent[];
+  getEventsBySessionId(sessionId: string): Promise<HookEvent[]>;
 
   /** Get filter options (distinct values for source_app, session_id, hook_event_type) */
-  getFilterOptions(): FilterOptions;
+  getFilterOptions(): Promise<FilterOptions>;
 
   /** Update HITL response status for an event */
-  updateEventHITLResponse(id: number, response: any): HookEvent | null;
+  updateEventHITLResponse(id: number, response: any): Promise<HookEvent | null>;
 
   // ============================================
   // Theme Operations
   // ============================================
 
   /** Insert a new theme */
-  insertTheme(theme: Theme): Theme;
+  insertTheme(theme: Theme): Promise<Theme>;
 
   /** Update theme fields */
-  updateTheme(id: string, updates: Partial<Theme>): boolean;
+  updateTheme(id: string, updates: Partial<Theme>): Promise<boolean>;
 
   /** Get theme by ID */
-  getTheme(id: string): Theme | null;
+  getTheme(id: string): Promise<Theme | null>;
 
   /** Search themes with filters */
-  getThemes(query?: ThemeSearchQuery): Theme[];
+  getThemes(query?: ThemeSearchQuery): Promise<Theme[]>;
 
   /** Delete theme by ID */
-  deleteTheme(id: string): boolean;
+  deleteTheme(id: string): Promise<boolean>;
 
   /** Increment download count */
-  incrementThemeDownloadCount(id: string): boolean;
+  incrementThemeDownloadCount(id: string): Promise<boolean>;
 
   // ============================================
   // Audio Cache Operations
   // ============================================
 
   /** Insert audio cache entry */
-  insertAudioCache(entry: Omit<AudioCacheEntry, 'id' | 'createdAt' | 'accessedAt' | 'accessCount'>): AudioCacheEntry;
+  insertAudioCache(entry: Omit<AudioCacheEntry, 'id' | 'createdAt' | 'accessedAt' | 'accessCount'>): Promise<AudioCacheEntry>;
 
   /** Get audio cache entry by key (also updates access stats) */
-  getAudioCacheByKey(key: string): AudioCacheEntry | null;
+  getAudioCacheByKey(key: string): Promise<AudioCacheEntry | null>;
 
   /** Get audio cache statistics */
-  getAudioCacheStats(): { count: number; totalSize: number; keys: string[] };
+  getAudioCacheStats(): Promise<{ count: number; totalSize: number; keys: string[] }>;
 
   /** Delete old audio cache entries */
-  deleteOldAudioCache(olderThanMs?: number): number;
+  deleteOldAudioCache(olderThanMs?: number): Promise<number>;
 
   // ============================================
   // Project Operations
   // ============================================
 
   /** Get project by ID */
-  getProject(id: string): Project | null;
+  getProject(id: string): Promise<Project | null>;
 
   /** Insert new project */
-  insertProject(project: Omit<Project, 'createdAt' | 'updatedAt'>): Project;
+  insertProject(project: Omit<Project, 'createdAt' | 'updatedAt'>): Promise<Project>;
 
   /** Update project fields */
-  updateProject(id: string, updates: Partial<Project>): Project | null;
+  updateProject(id: string, updates: Partial<Project>): Promise<Project | null>;
 
   /** List projects with search/filter */
-  listProjects(query?: ProjectSearchQuery): Project[];
+  listProjects(query?: ProjectSearchQuery): Promise<Project[]>;
 
   /** Archive project (set status to 'archived') */
-  archiveProject(id: string): boolean;
+  archiveProject(id: string): Promise<boolean>;
 
   // ============================================
   // Session Operations
   // ============================================
 
   /** Get session by ID */
-  getSession(id: string): ProjectSession | null;
+  getSession(id: string): Promise<ProjectSession | null>;
 
   /** Insert new session */
-  insertSession(session: Omit<ProjectSession, 'eventCount' | 'toolCallCount'>): ProjectSession;
+  insertSession(session: Omit<ProjectSession, 'eventCount' | 'toolCallCount'>): Promise<ProjectSession>;
 
   /** Update session fields */
-  updateSession(id: string, updates: Partial<ProjectSession>): ProjectSession | null;
+  updateSession(id: string, updates: Partial<ProjectSession>): Promise<ProjectSession | null>;
 
   /** List sessions for a project */
-  listProjectSessions(projectId: string): ProjectSession[];
+  listProjectSessions(projectId: string): Promise<ProjectSession[]>;
 
   /** Increment event/tool call counters */
-  incrementSessionCounts(sessionId: string, events?: number, toolCalls?: number): void;
+  incrementSessionCounts(sessionId: string, events?: number, toolCalls?: number): Promise<void>;
 
   // ============================================
   // Auto-Registration Helpers
   // ============================================
 
   /** Ensure project exists, create if not */
-  ensureProjectExists(sourceApp: string): Project;
+  ensureProjectExists(sourceApp: string): Promise<Project>;
 
   /** Ensure session exists, create if not */
-  ensureSessionExists(projectId: string, sessionId: string, modelName?: string): ProjectSession;
+  ensureSessionExists(projectId: string, sessionId: string, modelName?: string): Promise<ProjectSession>;
 
   /** Update project's last activity timestamp */
-  updateProjectActivity(projectId: string, sessionId: string): void;
+  updateProjectActivity(projectId: string, sessionId: string): Promise<void>;
 }

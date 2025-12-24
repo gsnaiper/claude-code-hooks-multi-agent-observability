@@ -34,8 +34,8 @@ import {
   getThemeStats 
 } from './theme';
 
-// Initialize database
-initDatabase();
+// Initialize database (async)
+await initDatabase();
 
 // Store WebSocket clients
 const wsClients = new Set<any>();
@@ -183,19 +183,19 @@ const server = Bun.serve({
         
         // Auto-register project and session
         const projectId = event.source_app || 'orphaned:unknown';
-        const project = ensureProjectExists(projectId);
-        const session = ensureSessionExists(projectId, event.session_id, event.model_name);
+        const project = await ensureProjectExists(projectId);
+        const session = await ensureSessionExists(projectId, event.session_id, event.model_name);
 
         // Add project_id to event
         const eventWithProject = { ...event, project_id: projectId };
 
         // Insert event into database
-        const savedEvent = insertEvent(eventWithProject);
+        const savedEvent = await insertEvent(eventWithProject);
 
         // Update counts and activity
         const isToolCall = event.hook_event_type.includes('ToolUse');
-        incrementSessionCounts(session.id, 1, isToolCall ? 1 : 0);
-        updateProjectActivity(projectId, event.session_id);
+        await incrementSessionCounts(session.id, 1, isToolCall ? 1 : 0);
+        await updateProjectActivity(projectId, event.session_id);
         
         // Broadcast to all WebSocket clients
         const message = JSON.stringify({ type: 'event', data: savedEvent });
@@ -222,16 +222,16 @@ const server = Bun.serve({
     
     // GET /events/filter-options - Get available filter options
     if (url.pathname === '/events/filter-options' && req.method === 'GET') {
-      const options = getFilterOptions();
+      const options = await getFilterOptions();
       return new Response(JSON.stringify(options), {
         headers: { ...headers, 'Content-Type': 'application/json' }
       });
     }
-    
+
     // GET /events/recent - Get recent events
     if (url.pathname === '/events/recent' && req.method === 'GET') {
       const limit = parseInt(url.searchParams.get('limit') || '300');
-      const events = getRecentEvents(limit);
+      const events = await getRecentEvents(limit);
       return new Response(JSON.stringify(events), {
         headers: { ...headers, 'Content-Type': 'application/json' }
       });
@@ -246,7 +246,7 @@ const server = Bun.serve({
         response.respondedAt = Date.now();
 
         // Update event in database
-        const updatedEvent = updateEventHITLResponse(id, response);
+        const updatedEvent = await updateEventHITLResponse(id, response);
 
         if (!updatedEvent) {
           return new Response(JSON.stringify({ error: 'Event not found' }), {
@@ -485,7 +485,7 @@ const server = Bun.serve({
         }
 
         // Check if already exists
-        const existing = getAudioCacheByKey(key);
+        const existing = await getAudioCacheByKey(key);
         if (existing) {
           return new Response(JSON.stringify({
             success: true,
@@ -499,7 +499,7 @@ const server = Bun.serve({
         // Calculate size from base64
         const sizeBytes = Math.ceil((audioData.length * 3) / 4);
 
-        const entry = insertAudioCache({
+        const entry = await insertAudioCache({
           key,
           audioData,
           mimeType: mimeType || 'audio/mpeg',
@@ -543,7 +543,7 @@ const server = Bun.serve({
         });
       }
 
-      const entry = getAudioCacheByKey(key);
+      const entry = await getAudioCacheByKey(key);
 
       if (!entry) {
         return new Response(JSON.stringify({
@@ -579,7 +579,7 @@ const server = Bun.serve({
 
     // GET /api/audio-stats - Get audio cache statistics
     if (url.pathname === '/api/audio-stats' && req.method === 'GET') {
-      const stats = getAudioCacheStats();
+      const stats = await getAudioCacheStats();
       return new Response(JSON.stringify({
         success: true,
         data: stats
@@ -591,7 +591,7 @@ const server = Bun.serve({
     // DELETE /api/audio/cleanup - Cleanup old audio entries
     if (url.pathname === '/api/audio/cleanup' && req.method === 'DELETE') {
       const days = parseInt(url.searchParams.get('days') || '7');
-      const deleted = deleteOldAudioCache(days * 24 * 60 * 60 * 1000);
+      const deleted = await deleteOldAudioCache(days * 24 * 60 * 60 * 1000);
       return new Response(JSON.stringify({
         success: true,
         data: { deleted },
@@ -614,7 +614,7 @@ const server = Bun.serve({
         offset: url.searchParams.get('offset') ? parseInt(url.searchParams.get('offset')!) : undefined,
       };
 
-      const projects = listProjects(query);
+      const projects = await listProjects(query);
       return new Response(JSON.stringify({
         success: true,
         data: projects
@@ -637,7 +637,7 @@ const server = Bun.serve({
         });
       }
 
-      const project = getProject(id);
+      const project = await getProject(id);
       if (!project) {
         return new Response(JSON.stringify({
           success: false,
@@ -672,7 +672,7 @@ const server = Bun.serve({
         }
 
         // Check if already exists
-        const existing = getProject(body.id);
+        const existing = await getProject(body.id);
         if (existing) {
           return new Response(JSON.stringify({
             success: false,
@@ -683,7 +683,7 @@ const server = Bun.serve({
           });
         }
 
-        const project = insertProject({
+        const project = await insertProject({
           id: body.id,
           displayName: body.displayName,
           description: body.description,
@@ -728,7 +728,7 @@ const server = Bun.serve({
 
       try {
         const updates = await req.json() as Partial<Project>;
-        const project = updateProject(id, updates);
+        const project = await updateProject(id, updates);
 
         if (!project) {
           return new Response(JSON.stringify({
@@ -772,7 +772,7 @@ const server = Bun.serve({
         });
       }
 
-      const success = archiveProject(id);
+      const success = await archiveProject(id);
       if (!success) {
         return new Response(JSON.stringify({
           success: false,
@@ -805,7 +805,7 @@ const server = Bun.serve({
         });
       }
 
-      const project = getProject(id);
+      const project = await getProject(id);
       if (!project) {
         return new Response(JSON.stringify({
           success: false,
@@ -816,7 +816,7 @@ const server = Bun.serve({
         });
       }
 
-      const sessions = listProjectSessions(id);
+      const sessions = await listProjectSessions(id);
       return new Response(JSON.stringify({
         success: true,
         data: sessions
@@ -839,7 +839,7 @@ const server = Bun.serve({
         });
       }
 
-      const session = getSession(id);
+      const session = await getSession(id);
       if (!session) {
         return new Response(JSON.stringify({
           success: false,
@@ -872,7 +872,7 @@ const server = Bun.serve({
         });
       }
 
-      const events = getEventsBySessionId(sessionId);
+      const events = await getEventsBySessionId(sessionId);
       return new Response(JSON.stringify({
         success: true,
         data: events
@@ -896,12 +896,12 @@ const server = Bun.serve({
   },
   
   websocket: {
-    open(ws) {
+    async open(ws) {
       console.log('WebSocket client connected');
       wsClients.add(ws);
-      
+
       // Send recent events on connection
-      const events = getRecentEvents(300);
+      const events = await getRecentEvents(300);
       ws.send(JSON.stringify({ type: 'initial', data: events }));
     },
     

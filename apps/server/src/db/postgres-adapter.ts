@@ -11,7 +11,7 @@
  * - GIN indexes for fast JSON queries
  */
 
-import { sql, SQL } from 'bun';
+import { SQL } from 'bun';
 import type { DatabaseAdapter, AudioCacheEntry } from './adapter';
 import type {
   HookEvent,
@@ -32,14 +32,17 @@ export class PostgresAdapter implements DatabaseAdapter {
   // Lifecycle
   // ============================================
 
-  init(): void {
+  async init(): Promise<void> {
     // Bun.sql creates a connection pool automatically
-    this.db = sql(this.connectionString);
+    this.db = new SQL(this.connectionString);
     console.log('[Postgres] Connected to database');
   }
 
-  close(): void {
+  async close(): Promise<void> {
     // Bun.sql handles connection cleanup automatically
+    if (this.db) {
+      this.db.close();
+    }
     console.log('[Postgres] Connection closed');
   }
 
@@ -47,7 +50,7 @@ export class PostgresAdapter implements DatabaseAdapter {
   // Event Operations
   // ============================================
 
-  insertEvent(event: HookEvent): HookEvent {
+  async insertEvent(event: HookEvent): Promise<HookEvent> {
     const timestamp = event.timestamp || Date.now();
 
     // Initialize humanInTheLoopStatus to pending if humanInTheLoop exists
@@ -56,7 +59,7 @@ export class PostgresAdapter implements DatabaseAdapter {
       humanInTheLoopStatus = { status: 'pending' };
     }
 
-    const result = this.db`
+    const result = await this.db`
       INSERT INTO events (
         source_app, session_id, project_id, hook_event_type, model_name,
         payload, chat, summary, human_in_the_loop, human_in_the_loop_status, timestamp
@@ -87,8 +90,8 @@ export class PostgresAdapter implements DatabaseAdapter {
     };
   }
 
-  getRecentEvents(limit: number = 300): HookEvent[] {
-    const rows = this.db`
+  async getRecentEvents(limit: number = 300): Promise<HookEvent[]> {
+    const rows = await this.db`
       SELECT
         id, source_app, session_id, project_id, hook_event_type, model_name,
         payload, chat, summary, human_in_the_loop, human_in_the_loop_status,
@@ -101,8 +104,8 @@ export class PostgresAdapter implements DatabaseAdapter {
     return (rows as any[]).map(row => this.rowToEvent(row)).reverse();
   }
 
-  getEventsBySessionId(sessionId: string): HookEvent[] {
-    const rows = this.db`
+  async getEventsBySessionId(sessionId: string): Promise<HookEvent[]> {
+    const rows = await this.db`
       SELECT
         id, source_app, session_id, project_id, hook_event_type, model_name,
         payload, chat, summary, human_in_the_loop, human_in_the_loop_status,
@@ -115,10 +118,10 @@ export class PostgresAdapter implements DatabaseAdapter {
     return (rows as any[]).map(row => this.rowToEvent(row));
   }
 
-  getFilterOptions(): FilterOptions {
-    const sourceApps = this.db`SELECT DISTINCT source_app FROM events ORDER BY source_app`;
-    const sessionIds = this.db`SELECT DISTINCT session_id FROM events ORDER BY session_id DESC LIMIT 300`;
-    const hookEventTypes = this.db`SELECT DISTINCT hook_event_type FROM events ORDER BY hook_event_type`;
+  async getFilterOptions(): Promise<FilterOptions> {
+    const sourceApps = await this.db`SELECT DISTINCT source_app FROM events ORDER BY source_app`;
+    const sessionIds = await this.db`SELECT DISTINCT session_id FROM events ORDER BY session_id DESC LIMIT 300`;
+    const hookEventTypes = await this.db`SELECT DISTINCT hook_event_type FROM events ORDER BY hook_event_type`;
 
     return {
       source_apps: (sourceApps as any[]).map(row => row.source_app),
@@ -127,20 +130,20 @@ export class PostgresAdapter implements DatabaseAdapter {
     };
   }
 
-  updateEventHITLResponse(id: number, response: any): HookEvent | null {
+  async updateEventHITLResponse(id: number, response: any): Promise<HookEvent | null> {
     const status = {
       status: 'responded',
       respondedAt: response.respondedAt,
       response
     };
 
-    this.db`
+    await this.db`
       UPDATE events
       SET human_in_the_loop_status = ${JSON.stringify(status)}::jsonb
       WHERE id = ${id}
     `;
 
-    const rows = this.db`
+    const rows = await this.db`
       SELECT
         id, source_app, session_id, project_id, hook_event_type, model_name,
         payload, chat, summary, human_in_the_loop, human_in_the_loop_status,
@@ -154,17 +157,26 @@ export class PostgresAdapter implements DatabaseAdapter {
   }
 
   private rowToEvent(row: any): HookEvent {
+    // Parse JSONB if returned as string (bun:sql behavior)
+    const parseJsonb = (val: any) => {
+      if (!val) return undefined;
+      if (typeof val === 'string') {
+        try { return JSON.parse(val); } catch { return val; }
+      }
+      return val;
+    };
+
     return {
       id: Number(row.id),
       source_app: row.source_app,
       session_id: row.session_id,
       hook_event_type: row.hook_event_type,
-      payload: row.payload, // JSONB is already parsed
-      chat: row.chat || undefined,
+      payload: parseJsonb(row.payload),
+      chat: parseJsonb(row.chat),
       summary: row.summary || undefined,
       timestamp: Math.floor(Number(row.timestamp)),
-      humanInTheLoop: row.human_in_the_loop || undefined,
-      humanInTheLoopStatus: row.human_in_the_loop_status || undefined,
+      humanInTheLoop: parseJsonb(row.human_in_the_loop),
+      humanInTheLoopStatus: parseJsonb(row.human_in_the_loop_status),
       model_name: row.model_name || undefined,
       project_id: row.project_id || undefined
     };
@@ -174,8 +186,8 @@ export class PostgresAdapter implements DatabaseAdapter {
   // Theme Operations
   // ============================================
 
-  insertTheme(theme: Theme): Theme {
-    this.db`
+  async insertTheme(theme: Theme): Promise<Theme> {
+    await this.db`
       INSERT INTO themes (
         id, name, display_name, description, colors, is_public,
         author_id, author_name, created_at, updated_at, tags,
@@ -201,36 +213,8 @@ export class PostgresAdapter implements DatabaseAdapter {
     return theme;
   }
 
-  updateTheme(id: string, updates: Partial<Theme>): boolean {
-    const setClauses: string[] = [];
-    const values: any[] = [];
-
-    if (updates.displayName !== undefined) {
-      setClauses.push(`display_name = $${values.length + 1}`);
-      values.push(updates.displayName);
-    }
-    if (updates.description !== undefined) {
-      setClauses.push(`description = $${values.length + 1}`);
-      values.push(updates.description);
-    }
-    if (updates.colors !== undefined) {
-      setClauses.push(`colors = $${values.length + 1}::jsonb`);
-      values.push(JSON.stringify(updates.colors));
-    }
-    if (updates.isPublic !== undefined) {
-      setClauses.push(`is_public = $${values.length + 1}`);
-      values.push(updates.isPublic);
-    }
-    if (updates.tags !== undefined) {
-      setClauses.push(`tags = $${values.length + 1}::text[]`);
-      values.push(updates.tags);
-    }
-
-    if (setClauses.length === 0) return false;
-
-    // Note: For dynamic updates, we'd need unsafe() or build the query differently
-    // For now, use a simpler approach
-    const result = this.db`
+  async updateTheme(id: string, updates: Partial<Theme>): Promise<boolean> {
+    await this.db`
       UPDATE themes SET
         display_name = COALESCE(${updates.displayName}, display_name),
         description = COALESCE(${updates.description}, description),
@@ -243,13 +227,13 @@ export class PostgresAdapter implements DatabaseAdapter {
     return true;
   }
 
-  getTheme(id: string): Theme | null {
-    const rows = this.db`SELECT * FROM themes WHERE id = ${id}`;
+  async getTheme(id: string): Promise<Theme | null> {
+    const rows = await this.db`SELECT * FROM themes WHERE id = ${id}`;
     const row = (rows as any[])[0];
     return row ? this.rowToTheme(row) : null;
   }
 
-  getThemes(query: ThemeSearchQuery = {}): Theme[] {
+  async getThemes(query: ThemeSearchQuery = {}): Promise<Theme[]> {
     // Build dynamic query
     let whereClause = 'WHERE 1=1';
     const conditions: string[] = [];
@@ -280,24 +264,24 @@ export class PostgresAdapter implements DatabaseAdapter {
     }[sortBy] || 'created_at';
 
     // For complex queries with dynamic WHERE, we use unsafe
-    const sql = `
+    const sqlQuery = `
       SELECT * FROM themes ${whereClause}
       ORDER BY ${sortColumn} ${sortOrder.toUpperCase()}
       ${query.limit ? `LIMIT ${query.limit}` : ''}
       ${query.offset ? `OFFSET ${query.offset}` : ''}
     `;
 
-    const rows = this.db.unsafe(sql);
+    const rows = await this.db.unsafe(sqlQuery);
     return (rows as any[]).map(row => this.rowToTheme(row));
   }
 
-  deleteTheme(id: string): boolean {
-    this.db`DELETE FROM themes WHERE id = ${id}`;
+  async deleteTheme(id: string): Promise<boolean> {
+    await this.db`DELETE FROM themes WHERE id = ${id}`;
     return true;
   }
 
-  incrementThemeDownloadCount(id: string): boolean {
-    this.db`UPDATE themes SET download_count = download_count + 1 WHERE id = ${id}`;
+  async incrementThemeDownloadCount(id: string): Promise<boolean> {
+    await this.db`UPDATE themes SET download_count = download_count + 1 WHERE id = ${id}`;
     return true;
   }
 
@@ -324,11 +308,11 @@ export class PostgresAdapter implements DatabaseAdapter {
   // Audio Cache Operations
   // ============================================
 
-  insertAudioCache(entry: Omit<AudioCacheEntry, 'id' | 'createdAt' | 'accessedAt' | 'accessCount'>): AudioCacheEntry {
+  async insertAudioCache(entry: Omit<AudioCacheEntry, 'id' | 'createdAt' | 'accessedAt' | 'accessCount'>): Promise<AudioCacheEntry> {
     const id = crypto.randomUUID();
     const now = Date.now();
 
-    this.db`
+    await this.db`
       INSERT INTO audio_cache (
         id, key, audio_data, mime_type, voice_id, text_hash,
         source_app, created_at, accessed_at, access_count, size_bytes
@@ -362,14 +346,14 @@ export class PostgresAdapter implements DatabaseAdapter {
     };
   }
 
-  getAudioCacheByKey(key: string): AudioCacheEntry | null {
-    const rows = this.db`SELECT * FROM audio_cache WHERE key = ${key}`;
+  async getAudioCacheByKey(key: string): Promise<AudioCacheEntry | null> {
+    const rows = await this.db`SELECT * FROM audio_cache WHERE key = ${key}`;
     const row = (rows as any[])[0];
 
     if (!row) return null;
 
     // Update access stats
-    this.db`UPDATE audio_cache SET accessed_at = NOW(), access_count = access_count + 1 WHERE id = ${row.id}`;
+    await this.db`UPDATE audio_cache SET accessed_at = NOW(), access_count = access_count + 1 WHERE id = ${row.id}`;
 
     return {
       id: row.id,
@@ -386,9 +370,9 @@ export class PostgresAdapter implements DatabaseAdapter {
     };
   }
 
-  getAudioCacheStats(): { count: number; totalSize: number; keys: string[] } {
-    const countResult = this.db`SELECT COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as total FROM audio_cache`;
-    const keysResult = this.db`SELECT key FROM audio_cache ORDER BY accessed_at DESC LIMIT 100`;
+  async getAudioCacheStats(): Promise<{ count: number; totalSize: number; keys: string[] }> {
+    const countResult = await this.db`SELECT COUNT(*) as count, COALESCE(SUM(size_bytes), 0) as total FROM audio_cache`;
+    const keysResult = await this.db`SELECT key FROM audio_cache ORDER BY accessed_at DESC LIMIT 100`;
 
     const stats = (countResult as any[])[0];
     return {
@@ -398,9 +382,9 @@ export class PostgresAdapter implements DatabaseAdapter {
     };
   }
 
-  deleteOldAudioCache(olderThanMs: number = 7 * 24 * 60 * 60 * 1000): number {
+  async deleteOldAudioCache(olderThanMs: number = 7 * 24 * 60 * 60 * 1000): Promise<number> {
     const cutoffDate = new Date(Date.now() - olderThanMs).toISOString();
-    const result = this.db`DELETE FROM audio_cache WHERE accessed_at < ${cutoffDate}::timestamptz`;
+    await this.db`DELETE FROM audio_cache WHERE accessed_at < ${cutoffDate}::timestamptz`;
     return 0; // Bun.sql doesn't return affected rows easily
   }
 
@@ -408,16 +392,16 @@ export class PostgresAdapter implements DatabaseAdapter {
   // Project Operations
   // ============================================
 
-  getProject(id: string): Project | null {
-    const rows = this.db`SELECT * FROM projects WHERE id = ${id}`;
+  async getProject(id: string): Promise<Project | null> {
+    const rows = await this.db`SELECT * FROM projects WHERE id = ${id}`;
     const row = (rows as any[])[0];
     return row ? this.rowToProject(row) : null;
   }
 
-  insertProject(project: Omit<Project, 'createdAt' | 'updatedAt'>): Project {
+  async insertProject(project: Omit<Project, 'createdAt' | 'updatedAt'>): Promise<Project> {
     const now = Date.now();
 
-    this.db`
+    await this.db`
       INSERT INTO projects (
         id, display_name, description, git_remote_url, local_path,
         created_at, updated_at, last_session_id, last_activity_at, status, metadata
@@ -443,19 +427,19 @@ export class PostgresAdapter implements DatabaseAdapter {
     };
   }
 
-  updateProject(id: string, updates: Partial<Project>): Project | null {
+  async updateProject(id: string, updates: Partial<Project>): Promise<Project | null> {
     const validStatuses = ['active', 'archived', 'paused'];
     if (updates.status && !validStatuses.includes(updates.status)) {
       throw new Error(`Invalid project status: ${updates.status}`);
     }
 
-    const project = this.getProject(id);
+    const project = await this.getProject(id);
     if (!project) return null;
 
     const now = Date.now();
     const updatedProject = { ...project, ...updates, updatedAt: now };
 
-    this.db`
+    await this.db`
       UPDATE projects SET
         display_name = ${updatedProject.displayName || null},
         description = ${updatedProject.description || null},
@@ -472,7 +456,7 @@ export class PostgresAdapter implements DatabaseAdapter {
     return updatedProject;
   }
 
-  listProjects(query: ProjectSearchQuery = {}): Project[] {
+  async listProjects(query: ProjectSearchQuery = {}): Promise<Project[]> {
     let whereClause = 'WHERE 1=1';
     const conditions: string[] = [];
 
@@ -497,19 +481,19 @@ export class PostgresAdapter implements DatabaseAdapter {
       lastActivity: 'last_activity_at'
     }[sortBy] || 'last_activity_at';
 
-    const sql = `
+    const sqlQuery = `
       SELECT * FROM projects ${whereClause}
       ORDER BY ${sortColumn} ${sortOrder.toUpperCase()} NULLS LAST
       ${query.limit ? `LIMIT ${query.limit}` : ''}
       ${query.offset ? `OFFSET ${query.offset}` : ''}
     `;
 
-    const rows = this.db.unsafe(sql);
+    const rows = await this.db.unsafe(sqlQuery);
     return (rows as any[]).map(row => this.rowToProject(row));
   }
 
-  archiveProject(id: string): boolean {
-    this.db`UPDATE projects SET status = 'archived', updated_at = NOW() WHERE id = ${id}`;
+  async archiveProject(id: string): Promise<boolean> {
+    await this.db`UPDATE projects SET status = 'archived', updated_at = NOW() WHERE id = ${id}`;
     return true;
   }
 
@@ -533,14 +517,14 @@ export class PostgresAdapter implements DatabaseAdapter {
   // Session Operations
   // ============================================
 
-  getSession(id: string): ProjectSession | null {
-    const rows = this.db`SELECT * FROM project_sessions WHERE id = ${id}`;
+  async getSession(id: string): Promise<ProjectSession | null> {
+    const rows = await this.db`SELECT * FROM project_sessions WHERE id = ${id}`;
     const row = (rows as any[])[0];
     return row ? this.rowToSession(row) : null;
   }
 
-  insertSession(session: Omit<ProjectSession, 'eventCount' | 'toolCallCount'>): ProjectSession {
-    this.db`
+  async insertSession(session: Omit<ProjectSession, 'eventCount' | 'toolCallCount'>): Promise<ProjectSession> {
+    await this.db`
       INSERT INTO project_sessions (
         id, project_id, started_at, ended_at, status, model_name,
         event_count, tool_call_count, notes
@@ -564,18 +548,18 @@ export class PostgresAdapter implements DatabaseAdapter {
     };
   }
 
-  updateSession(id: string, updates: Partial<ProjectSession>): ProjectSession | null {
+  async updateSession(id: string, updates: Partial<ProjectSession>): Promise<ProjectSession | null> {
     const validStatuses = ['active', 'completed', 'abandoned'];
     if (updates.status && !validStatuses.includes(updates.status)) {
       throw new Error(`Invalid session status: ${updates.status}`);
     }
 
-    const session = this.getSession(id);
+    const session = await this.getSession(id);
     if (!session) return null;
 
     const updatedSession = { ...session, ...updates };
 
-    this.db`
+    await this.db`
       UPDATE project_sessions SET
         ended_at = ${updatedSession.endedAt ? new Date(updatedSession.endedAt).toISOString() : null}::timestamptz,
         status = ${updatedSession.status},
@@ -589,8 +573,8 @@ export class PostgresAdapter implements DatabaseAdapter {
     return updatedSession;
   }
 
-  listProjectSessions(projectId: string): ProjectSession[] {
-    const rows = this.db`
+  async listProjectSessions(projectId: string): Promise<ProjectSession[]> {
+    const rows = await this.db`
       SELECT * FROM project_sessions
       WHERE project_id = ${projectId}
       ORDER BY started_at DESC
@@ -599,8 +583,8 @@ export class PostgresAdapter implements DatabaseAdapter {
     return (rows as any[]).map(row => this.rowToSession(row));
   }
 
-  incrementSessionCounts(sessionId: string, events: number = 1, toolCalls: number = 0): void {
-    this.db`
+  async incrementSessionCounts(sessionId: string, events: number = 1, toolCalls: number = 0): Promise<void> {
+    await this.db`
       UPDATE project_sessions
       SET event_count = event_count + ${events}, tool_call_count = tool_call_count + ${toolCalls}
       WHERE id = ${sessionId}
@@ -634,11 +618,11 @@ export class PostgresAdapter implements DatabaseAdapter {
     return projectId.split(':').pop() || projectId;
   }
 
-  ensureProjectExists(sourceApp: string): Project {
-    let project = this.getProject(sourceApp);
+  async ensureProjectExists(sourceApp: string): Promise<Project> {
+    let project = await this.getProject(sourceApp);
 
     if (!project) {
-      project = this.insertProject({
+      project = await this.insertProject({
         id: sourceApp,
         displayName: this.parseDisplayName(sourceApp),
         status: 'active'
@@ -648,11 +632,11 @@ export class PostgresAdapter implements DatabaseAdapter {
     return project;
   }
 
-  ensureSessionExists(projectId: string, sessionId: string, modelName?: string): ProjectSession {
-    let session = this.getSession(sessionId);
+  async ensureSessionExists(projectId: string, sessionId: string, modelName?: string): Promise<ProjectSession> {
+    let session = await this.getSession(sessionId);
 
     if (!session) {
-      session = this.insertSession({
+      session = await this.insertSession({
         id: sessionId,
         projectId,
         startedAt: Date.now(),
@@ -660,14 +644,14 @@ export class PostgresAdapter implements DatabaseAdapter {
         modelName
       });
     } else if (modelName && !session.modelName) {
-      session = this.updateSession(sessionId, { modelName }) || session;
+      session = await this.updateSession(sessionId, { modelName }) || session;
     }
 
     return session;
   }
 
-  updateProjectActivity(projectId: string, sessionId: string): void {
-    this.db`
+  async updateProjectActivity(projectId: string, sessionId: string): Promise<void> {
+    await this.db`
       UPDATE projects
       SET last_session_id = ${sessionId}, last_activity_at = NOW(), updated_at = NOW()
       WHERE id = ${projectId}

@@ -26,7 +26,7 @@ export class SqliteAdapter implements DatabaseAdapter {
   // Lifecycle
   // ============================================
 
-  init(): void {
+  async init(): Promise<void> {
     this.db = new Database(this.dbPath);
 
     // Enable WAL mode for better concurrent performance
@@ -37,7 +37,7 @@ export class SqliteAdapter implements DatabaseAdapter {
     this.runMigrations();
   }
 
-  close(): void {
+  async close(): Promise<void> {
     this.db.close();
   }
 
@@ -213,7 +213,7 @@ export class SqliteAdapter implements DatabaseAdapter {
   // Event Operations
   // ============================================
 
-  insertEvent(event: HookEvent): HookEvent {
+  async insertEvent(event: HookEvent): Promise<HookEvent> {
     const stmt = this.db.prepare(`
       INSERT INTO events (source_app, session_id, hook_event_type, payload, chat, summary, timestamp, humanInTheLoop, humanInTheLoopStatus, model_name, project_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -250,7 +250,7 @@ export class SqliteAdapter implements DatabaseAdapter {
     };
   }
 
-  getRecentEvents(limit: number = 300): HookEvent[] {
+  async getRecentEvents(limit: number = 300): Promise<HookEvent[]> {
     const stmt = this.db.prepare(`
       SELECT id, source_app, session_id, hook_event_type, payload, chat, summary, timestamp, humanInTheLoop, humanInTheLoopStatus, model_name, project_id
       FROM events
@@ -262,7 +262,7 @@ export class SqliteAdapter implements DatabaseAdapter {
     return rows.map(row => this.rowToEvent(row)).reverse();
   }
 
-  getEventsBySessionId(sessionId: string): HookEvent[] {
+  async getEventsBySessionId(sessionId: string): Promise<HookEvent[]> {
     const stmt = this.db.prepare(`
       SELECT id, source_app, session_id, hook_event_type, payload, chat, summary, timestamp, humanInTheLoop, humanInTheLoopStatus, model_name, project_id
       FROM events
@@ -274,7 +274,7 @@ export class SqliteAdapter implements DatabaseAdapter {
     return rows.map(row => this.rowToEvent(row));
   }
 
-  getFilterOptions(): FilterOptions {
+  async getFilterOptions(): Promise<FilterOptions> {
     const sourceApps = this.db.prepare('SELECT DISTINCT source_app FROM events ORDER BY source_app').all() as { source_app: string }[];
     const sessionIds = this.db.prepare('SELECT DISTINCT session_id FROM events ORDER BY session_id DESC LIMIT 300').all() as { session_id: string }[];
     const hookEventTypes = this.db.prepare('SELECT DISTINCT hook_event_type FROM events ORDER BY hook_event_type').all() as { hook_event_type: string }[];
@@ -286,7 +286,7 @@ export class SqliteAdapter implements DatabaseAdapter {
     };
   }
 
-  updateEventHITLResponse(id: number, response: any): HookEvent | null {
+  async updateEventHITLResponse(id: number, response: any): Promise<HookEvent | null> {
     const status = {
       status: 'responded',
       respondedAt: response.respondedAt,
@@ -326,7 +326,7 @@ export class SqliteAdapter implements DatabaseAdapter {
   // Theme Operations
   // ============================================
 
-  insertTheme(theme: Theme): Theme {
+  async insertTheme(theme: Theme): Promise<Theme> {
     const stmt = this.db.prepare(`
       INSERT INTO themes (id, name, displayName, description, colors, isPublic, authorId, authorName, createdAt, updatedAt, tags, downloadCount, rating, ratingCount)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -352,7 +352,7 @@ export class SqliteAdapter implements DatabaseAdapter {
     return theme;
   }
 
-  updateTheme(id: string, updates: Partial<Theme>): boolean {
+  async updateTheme(id: string, updates: Partial<Theme>): Promise<boolean> {
     const allowedFields = ['displayName', 'description', 'colors', 'isPublic', 'updatedAt', 'tags'];
     const setClause = Object.keys(updates)
       .filter(key => allowedFields.includes(key))
@@ -379,12 +379,12 @@ export class SqliteAdapter implements DatabaseAdapter {
     return result.changes > 0;
   }
 
-  getTheme(id: string): Theme | null {
+  async getTheme(id: string): Promise<Theme | null> {
     const row = this.db.prepare('SELECT * FROM themes WHERE id = ?').get(id) as any;
     return row ? this.rowToTheme(row) : null;
   }
 
-  getThemes(query: ThemeSearchQuery = {}): Theme[] {
+  async getThemes(query: ThemeSearchQuery = {}): Promise<Theme[]> {
     let sql = 'SELECT * FROM themes WHERE 1=1';
     const params: any[] = [];
 
@@ -429,12 +429,12 @@ export class SqliteAdapter implements DatabaseAdapter {
     return rows.map(row => this.rowToTheme(row));
   }
 
-  deleteTheme(id: string): boolean {
+  async deleteTheme(id: string): Promise<boolean> {
     const result = this.db.prepare('DELETE FROM themes WHERE id = ?').run(id);
     return result.changes > 0;
   }
 
-  incrementThemeDownloadCount(id: string): boolean {
+  async incrementThemeDownloadCount(id: string): Promise<boolean> {
     const result = this.db.prepare('UPDATE themes SET downloadCount = downloadCount + 1 WHERE id = ?').run(id);
     return result.changes > 0;
   }
@@ -462,7 +462,7 @@ export class SqliteAdapter implements DatabaseAdapter {
   // Audio Cache Operations
   // ============================================
 
-  insertAudioCache(entry: Omit<AudioCacheEntry, 'id' | 'createdAt' | 'accessedAt' | 'accessCount'>): AudioCacheEntry {
+  async insertAudioCache(entry: Omit<AudioCacheEntry, 'id' | 'createdAt' | 'accessedAt' | 'accessCount'>): Promise<AudioCacheEntry> {
     const id = crypto.randomUUID();
     const now = Date.now();
 
@@ -498,7 +498,7 @@ export class SqliteAdapter implements DatabaseAdapter {
     };
   }
 
-  getAudioCacheByKey(key: string): AudioCacheEntry | null {
+  async getAudioCacheByKey(key: string): Promise<AudioCacheEntry | null> {
     const row = this.db.prepare('SELECT * FROM audio_cache WHERE key = ?').get(key) as any;
 
     if (!row) return null;
@@ -522,7 +522,7 @@ export class SqliteAdapter implements DatabaseAdapter {
     };
   }
 
-  getAudioCacheStats(): { count: number; totalSize: number; keys: string[] } {
+  async getAudioCacheStats(): Promise<{ count: number; totalSize: number; keys: string[] }> {
     const countResult = this.db.prepare('SELECT COUNT(*) as count, SUM(size_bytes) as total FROM audio_cache').get() as any;
     const keysResult = this.db.prepare('SELECT key FROM audio_cache ORDER BY accessed_at DESC LIMIT 100').all() as any[];
 
@@ -533,7 +533,7 @@ export class SqliteAdapter implements DatabaseAdapter {
     };
   }
 
-  deleteOldAudioCache(olderThanMs: number = 7 * 24 * 60 * 60 * 1000): number {
+  async deleteOldAudioCache(olderThanMs: number = 7 * 24 * 60 * 60 * 1000): Promise<number> {
     const cutoff = Date.now() - olderThanMs;
     const result = this.db.prepare('DELETE FROM audio_cache WHERE accessed_at < ?').run(cutoff);
     return result.changes;
@@ -543,12 +543,12 @@ export class SqliteAdapter implements DatabaseAdapter {
   // Project Operations
   // ============================================
 
-  getProject(id: string): Project | null {
+  async getProject(id: string): Promise<Project | null> {
     const row = this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as any;
     return row ? this.rowToProject(row) : null;
   }
 
-  insertProject(project: Omit<Project, 'createdAt' | 'updatedAt'>): Project {
+  async insertProject(project: Omit<Project, 'createdAt' | 'updatedAt'>): Promise<Project> {
     const now = Date.now();
 
     this.db.prepare(`
@@ -575,7 +575,7 @@ export class SqliteAdapter implements DatabaseAdapter {
     };
   }
 
-  updateProject(id: string, updates: Partial<Project>): Project | null {
+  async updateProject(id: string, updates: Partial<Project>): Promise<Project | null> {
     const now = Date.now();
 
     const validStatuses = ['active', 'archived', 'paused'];
@@ -583,7 +583,7 @@ export class SqliteAdapter implements DatabaseAdapter {
       throw new Error(`Invalid project status: ${updates.status}`);
     }
 
-    const project = this.getProject(id);
+    const project = await this.getProject(id);
     if (!project) return null;
 
     const updatedProject = { ...project, ...updates, updatedAt: now };
@@ -616,7 +616,7 @@ export class SqliteAdapter implements DatabaseAdapter {
     return updatedProject;
   }
 
-  listProjects(query: ProjectSearchQuery = {}): Project[] {
+  async listProjects(query: ProjectSearchQuery = {}): Promise<Project[]> {
     let sql = 'SELECT * FROM projects WHERE 1=1';
     const params: any[] = [];
 
@@ -657,7 +657,7 @@ export class SqliteAdapter implements DatabaseAdapter {
     return rows.map(row => this.rowToProject(row));
   }
 
-  archiveProject(id: string): boolean {
+  async archiveProject(id: string): Promise<boolean> {
     const result = this.db.prepare('UPDATE projects SET status = ?, updated_at = ? WHERE id = ?')
       .run('archived', Date.now(), id);
     return result.changes > 0;
@@ -683,12 +683,12 @@ export class SqliteAdapter implements DatabaseAdapter {
   // Session Operations
   // ============================================
 
-  getSession(id: string): ProjectSession | null {
+  async getSession(id: string): Promise<ProjectSession | null> {
     const row = this.db.prepare('SELECT * FROM project_sessions WHERE id = ?').get(id) as any;
     return row ? this.rowToSession(row) : null;
   }
 
-  insertSession(session: Omit<ProjectSession, 'eventCount' | 'toolCallCount'>): ProjectSession {
+  async insertSession(session: Omit<ProjectSession, 'eventCount' | 'toolCallCount'>): Promise<ProjectSession> {
     this.db.prepare(`
       INSERT INTO project_sessions (id, project_id, started_at, ended_at, status, model_name, event_count, tool_call_count, notes)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -711,13 +711,13 @@ export class SqliteAdapter implements DatabaseAdapter {
     };
   }
 
-  updateSession(id: string, updates: Partial<ProjectSession>): ProjectSession | null {
+  async updateSession(id: string, updates: Partial<ProjectSession>): Promise<ProjectSession | null> {
     const validStatuses = ['active', 'completed', 'abandoned'];
     if (updates.status && !validStatuses.includes(updates.status)) {
       throw new Error(`Invalid session status: ${updates.status}`);
     }
 
-    const session = this.getSession(id);
+    const session = await this.getSession(id);
     if (!session) return null;
 
     const updatedSession = { ...session, ...updates };
@@ -744,13 +744,13 @@ export class SqliteAdapter implements DatabaseAdapter {
     return updatedSession;
   }
 
-  listProjectSessions(projectId: string): ProjectSession[] {
+  async listProjectSessions(projectId: string): Promise<ProjectSession[]> {
     const rows = this.db.prepare('SELECT * FROM project_sessions WHERE project_id = ? ORDER BY started_at DESC')
       .all(projectId) as any[];
     return rows.map(row => this.rowToSession(row));
   }
 
-  incrementSessionCounts(sessionId: string, events: number = 1, toolCalls: number = 0): void {
+  async incrementSessionCounts(sessionId: string, events: number = 1, toolCalls: number = 0): Promise<void> {
     this.db.prepare(`
       UPDATE project_sessions
       SET event_count = event_count + ?, tool_call_count = tool_call_count + ?
@@ -787,11 +787,11 @@ export class SqliteAdapter implements DatabaseAdapter {
     return projectId.split(':').pop() || projectId;
   }
 
-  ensureProjectExists(sourceApp: string): Project {
-    let project = this.getProject(sourceApp);
+  async ensureProjectExists(sourceApp: string): Promise<Project> {
+    let project = await this.getProject(sourceApp);
 
     if (!project) {
-      project = this.insertProject({
+      project = await this.insertProject({
         id: sourceApp,
         displayName: this.parseDisplayName(sourceApp),
         status: 'active'
@@ -801,11 +801,11 @@ export class SqliteAdapter implements DatabaseAdapter {
     return project;
   }
 
-  ensureSessionExists(projectId: string, sessionId: string, modelName?: string): ProjectSession {
-    let session = this.getSession(sessionId);
+  async ensureSessionExists(projectId: string, sessionId: string, modelName?: string): Promise<ProjectSession> {
+    let session = await this.getSession(sessionId);
 
     if (!session) {
-      session = this.insertSession({
+      session = await this.insertSession({
         id: sessionId,
         projectId,
         startedAt: Date.now(),
@@ -813,13 +813,13 @@ export class SqliteAdapter implements DatabaseAdapter {
         modelName
       });
     } else if (modelName && !session.modelName) {
-      session = this.updateSession(sessionId, { modelName }) || session;
+      session = await this.updateSession(sessionId, { modelName }) || session;
     }
 
     return session;
   }
 
-  updateProjectActivity(projectId: string, sessionId: string): void {
+  async updateProjectActivity(projectId: string, sessionId: string): Promise<void> {
     const now = Date.now();
     this.db.prepare(`
       UPDATE projects SET last_session_id = ?, last_activity_at = ?, updated_at = ?
