@@ -11,11 +11,12 @@ Features:
 """
 
 import os
+import re
 import json
 import time
 import hashlib
-import base64
 import fcntl
+import threading
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -26,12 +27,21 @@ try:
 except ImportError:
     REDIS_AVAILABLE = False
 
-# Configuration
+# Configuration with validation
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
-REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))
-REDIS_DB = int(os.getenv('REDIS_DB', '0'))
 REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
 REDIS_ENABLED = os.getenv('REDIS_ENABLED', 'true').lower() == 'true'
+
+try:
+    REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))
+    REDIS_DB = int(os.getenv('REDIS_DB', '0'))
+except ValueError:
+    print("[HookCache] Invalid REDIS_PORT or REDIS_DB, using defaults")
+    REDIS_PORT = 6379
+    REDIS_DB = 0
+
+# Stream name validation pattern
+VALID_STREAM_NAME = re.compile(r'^[a-zA-Z0-9_-]+$')
 
 # Fallback file locations
 FALLBACK_CACHE_DIR = Path('/tmp/claude-hooks-cache')
@@ -120,12 +130,12 @@ class HookCache:
         session_id: str,
         content_hash: Optional[str] = None
     ) -> str:
-        """Generate unique dedup key."""
+        """Generate unique dedup key using SHA256."""
         parts = [event_type, session_id]
         if content_hash:
             parts.append(content_hash)
         key_data = ":".join(parts)
-        return f"dedup:{hashlib.md5(key_data.encode()).hexdigest()[:16]}"
+        return f"dedup:{hashlib.sha256(key_data.encode()).hexdigest()[:16]}"
 
     def _redis_check_duplicate(self, key: str, ttl_seconds: int) -> bool:
         """Check duplicate using Redis SETNX (atomic)."""
@@ -258,12 +268,17 @@ class HookCache:
 
         Args:
             event_data: Event data to queue
-            stream: Redis stream name
+            stream: Redis stream name (alphanumeric, underscore, hyphen only)
 
         Returns:
             True if queued successfully
         """
         if not self.redis:
+            return False
+
+        # Validate stream name to prevent injection
+        if not VALID_STREAM_NAME.match(stream):
+            print(f"[HookCache] Invalid stream name: {stream}")
             return False
 
         try:
@@ -287,13 +302,18 @@ class HookCache:
         Get queued events from Redis Stream.
 
         Args:
-            stream: Redis stream name
+            stream: Redis stream name (alphanumeric, underscore, hyphen only)
             count: Max events to retrieve
 
         Returns:
             List of (id, data) tuples
         """
         if not self.redis:
+            return []
+
+        # Validate stream name to prevent injection
+        if not VALID_STREAM_NAME.match(stream):
+            print(f"[HookCache] Invalid stream name: {stream}")
             return []
 
         try:
@@ -344,18 +364,19 @@ class HookCache:
     # ========== Utility Methods ==========
 
     def _load_file_cache(self, path: Path) -> dict:
-        """Load JSON cache from file with locking."""
-        if not path.exists():
-            return {}
-
+        """Load JSON cache from file with atomic locking (no TOCTOU)."""
         try:
-            with open(path, 'r') as f:
+            # Use a+ mode to avoid race condition between exists() and open()
+            with open(path, 'a+') as f:
                 fcntl.flock(f.fileno(), fcntl.LOCK_SH)
                 try:
-                    return json.load(f)
+                    f.seek(0)
+                    content = f.read()
+                    return json.loads(content) if content.strip() else {}
                 finally:
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"[HookCache] Load error: {e}")
             return {}
 
     def _save_file_cache(self, path: Path, data: dict) -> None:
@@ -371,15 +392,19 @@ class HookCache:
             print(f"[HookCache] Save error: {e}")
 
 
-# Global singleton instance
+# Global singleton instance with thread safety
 _cache_instance: Optional[HookCache] = None
+_cache_lock = threading.Lock()
 
 
 def get_hook_cache() -> HookCache:
-    """Get or create the global HookCache instance."""
+    """Get or create the global HookCache instance (thread-safe)."""
     global _cache_instance
     if _cache_instance is None:
-        _cache_instance = HookCache()
+        with _cache_lock:
+            # Double-checked locking pattern
+            if _cache_instance is None:
+                _cache_instance = HookCache()
     return _cache_instance
 
 
@@ -391,7 +416,7 @@ def get_content_hash(data: dict) -> str:
         data: Event data dictionary
 
     Returns:
-        Short hash string
+        Short hash string (SHA256-based)
     """
     relevant_fields = ['tool_name', 'message', 'title', 'level']
     content_parts = []
@@ -403,4 +428,4 @@ def get_content_hash(data: dict) -> str:
     if not content_parts:
         content_parts = [json.dumps(data, sort_keys=True)]
 
-    return hashlib.md5(":".join(content_parts).encode()).hexdigest()[:8]
+    return hashlib.sha256(":".join(content_parts).encode()).hexdigest()[:8]
