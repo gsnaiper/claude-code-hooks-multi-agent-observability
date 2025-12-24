@@ -20,6 +20,20 @@ import threading
 from pathlib import Path
 from typing import Optional, Dict, Any
 
+# Load environment from ~/.env or project .env if available
+try:
+    from dotenv import load_dotenv
+    # Try user home first, then project root
+    home_env = Path.home() / '.env'
+    if home_env.exists():
+        load_dotenv(home_env)
+    # Also try project root (3 levels up from utils/)
+    project_env = Path(__file__).parent.parent.parent.parent / '.env'
+    if project_env.exists():
+        load_dotenv(project_env, override=False)
+except ImportError:
+    pass
+
 # Try importing redis, graceful fallback if not available
 try:
     import redis
