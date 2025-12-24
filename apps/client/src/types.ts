@@ -2,10 +2,11 @@
 export interface HumanInTheLoop {
   question: string;
   responseWebSocketUrl: string;
-  type: 'question' | 'permission' | 'choice';
+  type: 'question' | 'permission' | 'choice' | 'approval' | 'question_input';
   choices?: string[]; // For multiple choice questions
   timeout?: number; // Optional timeout in seconds
   requiresResponse?: boolean; // Whether response is required or optional
+  context?: Record<string, any>; // Additional context for approval (e.g., tool_name, command)
 }
 
 // Response interface
@@ -13,6 +14,9 @@ export interface HumanInTheLoopResponse {
   response?: string;
   permission?: boolean;
   choice?: string; // Selected choice from options
+  approved?: boolean; // For 'approval' type - whether action was approved
+  comment?: string; // Optional comment for approval/denial
+  cancelled?: boolean; // For 'question_input' type - whether user cancelled
   hookEvent: HookEvent;
   respondedAt: number;
   respondedBy?: string; // Optional user identifier
@@ -35,6 +39,16 @@ export interface HookEvent {
   summary?: string;
   timestamp?: number;
   model_name?: string;
+  model?: string;
+
+  // Tool information
+  tool_name?: string;
+  tool_command?: string;
+  tool_file?: { path: string; [key: string]: any };
+
+  // HITL information
+  hitl_question?: string;
+  hitl_permission?: string;
 
   // NEW: Optional HITL data
   humanInTheLoop?: HumanInTheLoop;

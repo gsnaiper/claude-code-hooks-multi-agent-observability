@@ -82,22 +82,25 @@
           <textarea
             v-model="responseText"
             class="w-full p-3 pr-14 border-2 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent resize-none transition-colors"
-            :class="isRecording ? 'border-red-500 bg-red-50 dark:bg-red-900/20' : 'border-yellow-500'"
+            :class="isRecording ? 'border-red-500 bg-red-50 dark:bg-red-900/20' : (isTranscribing ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-yellow-500')"
             rows="3"
-            :placeholder="isRecording ? 'Listening...' : 'Type your response here...'"
+            :placeholder="isRecording ? 'Listening...' : (isTranscribing ? 'Transcribing...' : 'Type your response here...')"
             @click.stop
           ></textarea>
           <!-- Microphone Button (inside textarea) -->
           <button
             v-if="voiceSupported"
             @click.stop="toggleRecording('ru-RU')"
+            :disabled="isTranscribing"
             class="absolute right-3 top-3 p-2 rounded-lg transition-all duration-200 shadow-md hover:shadow-lg"
             :class="isRecording
               ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
-              : 'bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200'"
-            :title="isRecording ? 'Stop recording' : 'Start voice input'"
+              : (isTranscribing
+                ? 'bg-blue-500 text-white animate-pulse cursor-wait'
+                : 'bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200')"
+            :title="isRecording ? 'Stop recording' : (isTranscribing ? 'Transcribing...' : 'Start voice input')"
           >
-            <span class="text-xl">{{ isRecording ? '🔴' : '🎤' }}</span>
+            <span class="text-xl">{{ isRecording ? '🔴' : (isTranscribing ? '⏳' : '🎤') }}</span>
           </button>
         </div>
         <div class="flex justify-end space-x-2 mt-2">
@@ -148,6 +151,153 @@
           >
             {{ isSubmitting ? '⏳' : choice }}
           </button>
+        </div>
+      </div>
+
+      <div v-else-if="event.humanInTheLoop.type === 'approval'">
+        <!-- Approval with optional comment (text/voice input) -->
+        <div class="space-y-3">
+          <!-- Diff Display for Edit operations -->
+          <div v-if="event.humanInTheLoop.context?.old_string || event.humanInTheLoop.context?.new_string" class="font-mono text-sm bg-gray-900 rounded-lg overflow-hidden">
+            <div class="px-3 py-2 bg-gray-800 text-gray-300 border-b border-gray-700 flex items-center gap-2">
+              <span>📝</span>
+              <span class="text-xs">{{ event.humanInTheLoop.context?.file_path || 'File Edit' }}</span>
+            </div>
+            <div class="p-3 space-y-1">
+              <div v-if="event.humanInTheLoop.context?.old_string" class="text-red-400 whitespace-pre-wrap break-all">
+                <span class="select-none">- </span>{{ event.humanInTheLoop.context.old_string }}
+              </div>
+              <div v-if="event.humanInTheLoop.context?.new_string" class="text-green-400 whitespace-pre-wrap break-all">
+                <span class="select-none">+ </span>{{ event.humanInTheLoop.context.new_string }}
+              </div>
+            </div>
+          </div>
+
+          <!-- Content Preview for Write operations -->
+          <div v-else-if="event.humanInTheLoop.context?.content" class="font-mono text-sm bg-gray-900 rounded-lg overflow-hidden">
+            <div class="px-3 py-2 bg-gray-800 text-gray-300 border-b border-gray-700 flex items-center gap-2">
+              <span>📄</span>
+              <span class="text-xs">{{ event.humanInTheLoop.context?.file_path || 'New File' }}</span>
+            </div>
+            <div class="p-3 text-green-400 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+              {{ event.humanInTheLoop.context.content }}
+            </div>
+          </div>
+
+          <!-- Optional comment input -->
+          <div class="relative">
+            <textarea
+              v-model="approvalComment"
+              class="w-full p-3 pr-14 border-2 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent resize-none transition-colors"
+              :class="isRecording ? 'border-red-500 bg-red-50 dark:bg-red-900/20' : (isTranscribing ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-300 dark:border-gray-600')"
+              rows="2"
+              :placeholder="isRecording ? 'Listening...' : (isTranscribing ? 'Transcribing...' : 'Optional comment (voice or text)...')"
+              @click.stop
+            ></textarea>
+            <!-- Microphone Button -->
+            <button
+              v-if="voiceSupported"
+              @click.stop="toggleApprovalVoiceInput"
+              :disabled="isTranscribing"
+              class="absolute right-3 top-3 p-2 rounded-lg transition-all duration-200 shadow-md hover:shadow-lg"
+              :class="isRecording
+                ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
+                : (isTranscribing
+                  ? 'bg-blue-500 text-white animate-pulse cursor-wait'
+                  : 'bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200')"
+              :title="isRecording ? 'Stop recording' : (isTranscribing ? 'Transcribing...' : 'Voice input')"
+            >
+              <span class="text-xl">{{ isRecording ? '🔴' : (isTranscribing ? '⏳' : '🎤') }}</span>
+            </button>
+          </div>
+
+          <!-- Approve/Deny buttons -->
+          <div class="flex justify-end items-center space-x-3">
+            <div v-if="hasSubmittedResponse || event.humanInTheLoopStatus?.status === 'responded'" class="flex items-center px-3 py-2 bg-green-100 dark:bg-green-900/30 rounded-lg border border-green-500">
+              <span class="text-sm font-bold text-green-900 dark:text-green-100">Responded</span>
+            </div>
+            <button
+              @click.stop="submitApproval(false)"
+              :disabled="isSubmitting || hasSubmittedResponse"
+              class="px-6 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition-all duration-200 shadow-md hover:shadow-lg transform hover:scale-105"
+              :class="hasSubmittedResponse ? 'opacity-40 cursor-not-allowed' : ''"
+            >
+              {{ isSubmitting ? '⏳' : '❌ Deny' }}
+            </button>
+            <button
+              @click.stop="submitApproval(true)"
+              :disabled="isSubmitting || hasSubmittedResponse"
+              class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-all duration-200 shadow-md hover:shadow-lg transform hover:scale-105"
+              :class="hasSubmittedResponse ? 'opacity-40 cursor-not-allowed' : ''"
+            >
+              {{ isSubmitting ? '⏳' : '✅ Approve' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div v-else-if="event.humanInTheLoop.type === 'question_input'">
+        <!-- Question Input - Claude's question redirected to UI -->
+        <div class="space-y-3">
+          <!-- Claude's Question Display -->
+          <div class="bg-blue-50 dark:bg-blue-900/30 p-4 rounded-lg border border-blue-200 dark:border-blue-700">
+            <div class="flex items-start gap-2">
+              <span class="text-2xl">🤖</span>
+              <div>
+                <span class="font-bold text-blue-800 dark:text-blue-200">Claude asks:</span>
+                <p class="mt-1 text-blue-900 dark:text-blue-100 whitespace-pre-wrap">{{ event.humanInTheLoop.question }}</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Response Input with Voice -->
+          <div class="relative">
+            <textarea
+              v-model="responseText"
+              class="w-full p-3 pr-14 border-2 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none transition-colors"
+              :class="isRecording ? 'border-red-500 bg-red-50 dark:bg-red-900/20' : (isTranscribing ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-blue-300 dark:border-blue-600')"
+              rows="3"
+              :placeholder="isRecording ? 'Listening...' : (isTranscribing ? 'Transcribing...' : 'Type or speak your answer...')"
+              @click.stop
+            ></textarea>
+            <!-- Microphone Button -->
+            <button
+              v-if="voiceSupported"
+              @click.stop="toggleRecording('ru-RU')"
+              :disabled="isTranscribing"
+              class="absolute right-3 top-3 p-2 rounded-lg transition-all duration-200 shadow-md hover:shadow-lg"
+              :class="isRecording
+                ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
+                : (isTranscribing
+                  ? 'bg-blue-500 text-white animate-pulse cursor-wait'
+                  : 'bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200')"
+              :title="isRecording ? 'Stop recording' : (isTranscribing ? 'Transcribing...' : 'Voice input')"
+            >
+              <span class="text-xl">{{ isRecording ? '🔴' : (isTranscribing ? '⏳' : '🎤') }}</span>
+            </button>
+          </div>
+
+          <!-- Action Buttons -->
+          <div class="flex justify-end items-center space-x-3">
+            <div v-if="hasSubmittedResponse || event.humanInTheLoopStatus?.status === 'responded'" class="flex items-center px-3 py-2 bg-green-100 dark:bg-green-900/30 rounded-lg border border-green-500">
+              <span class="text-sm font-bold text-green-900 dark:text-green-100">Answered</span>
+            </div>
+            <button
+              @click.stop="submitQuestionCancel"
+              :disabled="isSubmitting || hasSubmittedResponse"
+              class="px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white font-bold rounded-lg transition-all duration-200 shadow-md hover:shadow-lg"
+              :class="hasSubmittedResponse ? 'opacity-40 cursor-not-allowed' : ''"
+            >
+              {{ isSubmitting ? '⏳' : '❌ Cancel' }}
+            </button>
+            <button
+              @click.stop="submitResponse"
+              :disabled="!responseText.trim() || isSubmitting || hasSubmittedResponse"
+              class="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-bold rounded-lg transition-all duration-200 shadow-md hover:shadow-lg transform hover:scale-105 disabled:transform-none disabled:cursor-not-allowed"
+            >
+              {{ isSubmitting ? '⏳ Sending...' : '✅ Reply' }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -365,6 +515,7 @@ const copyButtonText = ref('📋 Copy');
 
 // New refs for HITL
 const responseText = ref('');
+const approvalComment = ref(''); // For approval type HITL
 const isSubmitting = ref(false);
 const hasSubmittedResponse = ref(false);
 const localResponse = ref<HumanInTheLoopResponse | null>(null); // Optimistic UI
@@ -373,18 +524,31 @@ const localResponse = ref<HumanInTheLoopResponse | null>(null); // Optimistic UI
 const { isMobile } = useMediaQuery();
 
 // Voice input for HITL responses
-const { isRecording, transcript, isSupported: voiceSupported, toggleRecording, clearTranscript } = useVoiceInput();
+const { isRecording, isTranscribing, transcript, isSupported: voiceSupported, toggleRecording, clearTranscript } = useVoiceInput();
 
 // Voice notifications for audio replay
 const voiceNotifications = useVoiceNotifications();
 const isPlayingAudio = ref(false);
 
-// Watch transcript changes and update response text
+// Track which field voice input is for (question response vs approval comment)
+const voiceInputTarget = ref<'response' | 'approval'>('response');
+
+// Watch transcript changes and update the appropriate text field
 watch(transcript, (newTranscript) => {
   if (newTranscript) {
-    responseText.value = newTranscript;
+    if (voiceInputTarget.value === 'approval') {
+      approvalComment.value = newTranscript;
+    } else {
+      responseText.value = newTranscript;
+    }
   }
 });
+
+// Toggle voice input for approval comment
+const toggleApprovalVoiceInput = async () => {
+  voiceInputTarget.value = 'approval';
+  await toggleRecording('ru-RU');
+};
 
 const toggleExpanded = () => {
   isExpanded.value = !isExpanded.value;
@@ -652,6 +816,81 @@ const submitChoice = async (choice: string) => {
     localResponse.value = null;
     hasSubmittedResponse.value = false;
     alert('Failed to submit choice. Please try again.');
+  } finally {
+    isSubmitting.value = false;
+  }
+};
+
+const submitApproval = async (approved: boolean) => {
+  if (!props.event.id) return;
+
+  const response: HumanInTheLoopResponse = {
+    approved,
+    comment: approvalComment.value.trim() || undefined,
+    hookEvent: props.event,
+    respondedAt: Date.now()
+  };
+
+  // Optimistic UI: Show response immediately
+  localResponse.value = response;
+  hasSubmittedResponse.value = true;
+  const savedComment = approvalComment.value;
+  approvalComment.value = '';
+  clearTranscript(); // Clear voice input state
+  isSubmitting.value = true;
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/events/${props.event.id}/respond`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(response)
+    });
+
+    if (!res.ok) throw new Error('Failed to submit approval');
+
+    emit('response-submitted', response);
+  } catch (error) {
+    console.error('Error submitting approval:', error);
+    // Rollback optimistic update
+    localResponse.value = null;
+    hasSubmittedResponse.value = false;
+    approvalComment.value = savedComment;
+    alert('Failed to submit approval. Please try again.');
+  } finally {
+    isSubmitting.value = false;
+  }
+};
+
+// Cancel a question_input HITL request
+const submitQuestionCancel = async () => {
+  if (!props.event.id) return;
+
+  const response: HumanInTheLoopResponse = {
+    cancelled: true,
+    hookEvent: props.event,
+    respondedAt: Date.now()
+  };
+
+  // Optimistic UI
+  localResponse.value = response;
+  hasSubmittedResponse.value = true;
+  isSubmitting.value = true;
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/events/${props.event.id}/respond`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(response)
+    });
+
+    if (!res.ok) throw new Error('Failed to cancel question');
+
+    emit('response-submitted', response);
+  } catch (error) {
+    console.error('Error cancelling question:', error);
+    localResponse.value = null;
+    hasSubmittedResponse.value = false;
+    alert('Failed to cancel. Please try again.');
   } finally {
     isSubmitting.value = false;
   }

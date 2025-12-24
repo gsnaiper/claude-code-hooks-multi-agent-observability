@@ -1,13 +1,26 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.8"
+# dependencies = ["requests", "websockets"]
 # ///
 
 import json
 import sys
 import re
+import os
+import shlex
+import fcntl
 from pathlib import Path
 from utils.constants import ensure_session_log_dir
+from utils.hitl import ask_approval, ask_question_via_hitl
+from config import (
+    is_hitl_enabled,
+    is_decision_tool,
+    is_protected_file,
+    get_timeout,
+    get_hitl_type,
+    should_require_hitl
+)
 
 # Allowed directories where rm -rf is permitted
 ALLOWED_RM_DIRECTORIES = [
@@ -18,40 +31,37 @@ def is_path_in_allowed_directory(command, allowed_dirs):
     """
     Check if the rm command targets paths exclusively within allowed directories.
     Returns True if all paths in the command are within allowed directories.
+    Uses shlex for proper shell parsing of quoted paths.
     """
-    # Extract the path portion after rm and its flags
-    # Pattern: rm [flags] path1 path2 ...
-    path_pattern = r'rm\s+(?:-[\w]+\s+|--[\w-]+\s+)*(.+)$'
-    match = re.search(path_pattern, command, re.IGNORECASE)
-
-    if not match:
+    try:
+        # Use shlex for proper shell parsing (handles quotes, escapes)
+        parts = shlex.split(command)
+    except ValueError:
+        # Malformed command - treat as not allowed
         return False
 
-    path_str = match.group(1).strip()
+    if not parts or parts[0] != 'rm':
+        return False
 
-    # Split by spaces to get individual paths (simple approach)
-    # This might not handle all edge cases but works for common usage
-    paths = path_str.split()
+    # Extract paths (skip 'rm' and any flags starting with -)
+    paths = [p for p in parts[1:] if not p.startswith('-')]
 
     if not paths:
         return False
 
     # Check if all paths are within allowed directories
     for path in paths:
-        # Remove quotes
-        path = path.strip('\'"')
-
         # Skip if empty
         if not path:
             continue
 
+        # Normalize path for comparison
+        normalized = path.lstrip('./')
+
         # Check if this path is within any allowed directory
         is_allowed = False
         for allowed_dir in allowed_dirs:
-            # Check various formats:
-            # - trees/something
-            # - ./trees/something
-            if path.startswith(allowed_dir) or path.startswith('./' + allowed_dir):
+            if normalized.startswith(allowed_dir) or path.startswith('./' + allowed_dir):
                 is_allowed = True
                 break
 
@@ -168,6 +178,134 @@ def main():
         tool_name = input_data.get('tool_name', '')
         tool_input = input_data.get('tool_input', {})
 
+        # Session data for HITL requests
+        session_data = {
+            'source_app': input_data.get('source_app', 'claude-code'),
+            'session_id': input_data.get('session_id', 'unknown')
+        }
+
+        # ===========================================
+        # DECISION TOOLS (AskUserQuestion, ExitPlanMode, etc.)
+        # ===========================================
+        if is_hitl_enabled() and is_decision_tool(tool_name):
+            timeout = get_timeout(tool_name)
+
+            # AskUserQuestion - redirect question to UI with voice input
+            if tool_name == 'AskUserQuestion':
+                questions = tool_input.get('questions', [])
+                question_text = questions[0].get('question', '') if questions else 'Unknown question'
+
+                result = ask_question_via_hitl(
+                    f"🤖 Claude asks:\n\n{question_text}",
+                    session_data,
+                    context={
+                        'tool_name': tool_name,
+                        'questions': questions,
+                        'original_input': tool_input
+                    },
+                    hook_event_type='PreToolUse',
+                    payload={'tool_name': tool_name, 'tool_input': tool_input},
+                    timeout=timeout
+                )
+
+                if result.answered and result.response:
+                    # User answered - allow tool with response info
+                    print(f"User response received: {result.response[:50]}...", file=sys.stderr)
+                    # Note: The actual response handling depends on how Claude expects the answer
+                    sys.exit(0)
+                elif result.cancelled:
+                    print("BLOCKED: User cancelled the question", file=sys.stderr)
+                    sys.exit(2)
+                else:
+                    print("BLOCKED: No response received (timeout)", file=sys.stderr)
+                    sys.exit(2)
+
+            # ExitPlanMode - approve plan execution
+            elif tool_name == 'ExitPlanMode':
+                result = ask_approval(
+                    "📋 Exit Plan Mode - Ready to execute the plan?",
+                    session_data,
+                    context={
+                        'tool_name': tool_name,
+                        'action': 'exit_plan_mode'
+                    },
+                    hook_event_type='PreToolUse',
+                    payload={'tool_name': tool_name, 'tool_input': tool_input},
+                    timeout=timeout
+                )
+
+                if result.approved:
+                    comment = f" Comment: {result.comment}" if result.comment else ""
+                    print(f"APPROVED: Plan execution approved.{comment}", file=sys.stderr)
+                    sys.exit(0)
+                else:
+                    reason = result.comment or "User denied plan execution"
+                    print(f"BLOCKED: {reason}", file=sys.stderr)
+                    sys.exit(2)
+
+            # EnterPlanMode - approve entering plan mode
+            elif tool_name == 'EnterPlanMode':
+                result = ask_approval(
+                    "📝 Enter Plan Mode - Start planning?",
+                    session_data,
+                    context={
+                        'tool_name': tool_name,
+                        'action': 'enter_plan_mode'
+                    },
+                    hook_event_type='PreToolUse',
+                    payload={'tool_name': tool_name, 'tool_input': tool_input},
+                    timeout=timeout
+                )
+
+                if result.approved:
+                    comment = f" Comment: {result.comment}" if result.comment else ""
+                    print(f"APPROVED: Entering plan mode.{comment}", file=sys.stderr)
+                    sys.exit(0)
+                else:
+                    reason = result.comment or "User denied entering plan mode"
+                    print(f"BLOCKED: {reason}", file=sys.stderr)
+                    sys.exit(2)
+
+        # ===========================================
+        # PROTECTED FILE EDITS
+        # ===========================================
+        if is_hitl_enabled() and tool_name in ['Edit', 'Write', 'MultiEdit']:
+            file_path = tool_input.get('file_path', '')
+
+            if is_protected_file(file_path):
+                timeout = get_timeout(tool_name)
+
+                # Build context for diff display
+                context = {
+                    'tool_name': tool_name,
+                    'file_path': file_path
+                }
+
+                # Add diff info for Edit
+                if tool_name == 'Edit':
+                    context['old_string'] = tool_input.get('old_string', '')
+                    context['new_string'] = tool_input.get('new_string', '')
+                elif tool_name == 'Write':
+                    context['content'] = tool_input.get('content', '')[:500]  # Truncate for display
+
+                result = ask_approval(
+                    f"📝 {tool_name} protected file: `{file_path}`",
+                    session_data,
+                    context=context,
+                    hook_event_type='PreToolUse',
+                    payload={'tool_name': tool_name, 'tool_input': tool_input},
+                    timeout=timeout
+                )
+
+                if result.approved:
+                    comment = f" Comment: {result.comment}" if result.comment else ""
+                    print(f"APPROVED: File edit approved.{comment}", file=sys.stderr)
+                    # Continue to logging, don't exit
+                else:
+                    reason = result.comment or "User denied file edit"
+                    print(f"BLOCKED: {reason}", file=sys.stderr)
+                    sys.exit(2)
+
         # Check for .env file access (blocks access to sensitive environment files)
         # COMMENTED OUT: Allows worktree command to create .env files automatically
         # if is_env_file_access(tool_name, tool_input):
@@ -179,43 +317,77 @@ def main():
         if tool_name == 'Bash':
             command = tool_input.get('command', '')
 
-            # Block rm -rf commands unless they target allowed directories
+            # Dangerous rm -rf commands require human approval
             if is_dangerous_rm_command(command, ALLOWED_RM_DIRECTORIES):
-                print("BLOCKED: Dangerous rm command detected and prevented", file=sys.stderr)
-                print(f"Tip: rm -rf is only allowed in these directories: {', '.join(ALLOWED_RM_DIRECTORIES)}", file=sys.stderr)
-                sys.exit(2)  # Exit code 2 blocks tool call and shows error to Claude
+                if is_hitl_enabled():
+                    result = ask_approval(
+                        f"🚨 Dangerous command detected:\n\n`{command}`\n\nAllow execution?",
+                        session_data,
+                        context={
+                            'tool_name': tool_name,
+                            'command': command,
+                            'allowed_dirs': ALLOWED_RM_DIRECTORIES
+                        },
+                        hook_event_type='PreToolUse',
+                        payload={'tool_name': tool_name, 'tool_input': tool_input},
+                        timeout=120  # 2 minutes for quick approval
+                    )
+
+                    if result.approved:
+                        if result.comment:
+                            print(f"APPROVED with comment: {result.comment}", file=sys.stderr)
+                        else:
+                            print("APPROVED: Proceeding with command", file=sys.stderr)
+                        # Continue execution (don't exit, will proceed to logging)
+                    else:
+                        reason = result.comment or "No reason provided"
+                        print(f"DENIED: {reason}", file=sys.stderr)
+                        print(f"Command blocked: {command}", file=sys.stderr)
+                        sys.exit(2)  # Exit code 2 blocks tool call
+                else:
+                    # HITL disabled - use legacy blocking behavior
+                    print("BLOCKED: Dangerous rm command detected and prevented", file=sys.stderr)
+                    print(f"Tip: rm -rf is only allowed in these directories: {', '.join(ALLOWED_RM_DIRECTORIES)}", file=sys.stderr)
+                    sys.exit(2)  # Exit code 2 blocks tool call and shows error to Claude
         
         # Extract session_id
         session_id = input_data.get('session_id', 'unknown')
-        
+
         # Ensure session log directory exists
         log_dir = ensure_session_log_dir(session_id)
         log_path = log_dir / 'pre_tool_use.json'
-        
-        # Read existing log data or initialize empty list
-        if log_path.exists():
-            with open(log_path, 'r') as f:
-                try:
-                    log_data = json.load(f)
-                except (json.JSONDecodeError, ValueError):
+
+        # Use file locking to prevent TOCTOU race conditions
+        with open(log_path, 'a+') as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)  # Exclusive lock
+            try:
+                f.seek(0)
+                content = f.read()
+                if content:
+                    try:
+                        log_data = json.loads(content)
+                    except (json.JSONDecodeError, ValueError):
+                        log_data = []
+                else:
                     log_data = []
-        else:
-            log_data = []
-        
-        # Append new data
-        log_data.append(input_data)
-        
-        # Write back to file with formatting
-        with open(log_path, 'w') as f:
-            json.dump(log_data, f, indent=2)
+
+                # Append new data
+                log_data.append(input_data)
+
+                # Write back to file with formatting
+                f.seek(0)
+                f.truncate()
+                json.dump(log_data, f, indent=2)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)  # Release lock
         
         sys.exit(0)
         
-    except json.JSONDecodeError:
-        # Gracefully handle JSON decode errors
+    except json.JSONDecodeError as e:
+        print(f"[HITL] JSON decode error: {e}", file=sys.stderr)
         sys.exit(0)
-    except Exception:
-        # Handle any other errors gracefully
+    except Exception as e:
+        print(f"[HITL] Unexpected error: {e}", file=sys.stderr)
         sys.exit(0)
 
 if __name__ == '__main__':

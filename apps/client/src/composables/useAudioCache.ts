@@ -356,6 +356,63 @@ function createAudioCache() {
     }
   };
 
+  // Transcribe audio via ElevenLabs Speech-to-Text API
+  const transcribeAudio = async (
+    audioBlob: Blob,
+    languageCode?: string,
+    apiKeyOverride?: string
+  ): Promise<string> => {
+    const apiKey = apiKeyOverride || ELEVENLABS_API_KEY;
+    if (!apiKey) {
+      throw new Error('ElevenLabs API key not configured');
+    }
+
+    // Derive file extension from MIME type
+    const getFileExtension = (mimeType: string): string => {
+      if (mimeType.includes('webm')) return 'webm';
+      if (mimeType.includes('mp4')) return 'mp4';
+      if (mimeType.includes('ogg')) return 'ogg';
+      return 'webm'; // fallback
+    };
+
+    const formData = new FormData();
+    formData.append('model_id', 'scribe_v1');
+
+    const ext = getFileExtension(audioBlob.type || 'audio/webm');
+    formData.append('file', audioBlob, `recording.${ext}`);
+
+    if (languageCode) {
+      formData.append('language_code', languageCode);
+    }
+
+    console.log(`[AudioCache] Transcribing audio (${(audioBlob.size / 1024).toFixed(1)}KB)...`);
+
+    // Add timeout with AbortController
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const response = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+        method: 'POST',
+        headers: {
+          'xi-api-key': apiKey
+        },
+        body: formData,
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        throw new Error(`ElevenLabs STT error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      console.log(`[AudioCache] Transcription complete: "${(data.text || '').slice(0, 50)}..."`);
+      return data.text || '';
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
   // Get cache statistics
   const getCacheStats = () => {
     return {
@@ -379,6 +436,7 @@ function createAudioCache() {
     refreshAllKeys,
     selectBestKey,
     generateViaAPI,
+    transcribeAudio,
     cache,
     isLoading,
     lastCharacterCost

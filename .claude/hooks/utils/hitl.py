@@ -12,14 +12,16 @@ class HITLRequest:
     def __init__(
         self,
         question: str,
-        hitl_type: Literal['question', 'permission', 'choice'] = 'question',
+        hitl_type: Literal['question', 'permission', 'choice', 'approval'] = 'question',
         choices: Optional[list[str]] = None,
+        context: Optional[Dict[str, Any]] = None,  # Additional context for approval
         timeout: int = 300,  # 5 minutes default
         observability_url: str = "http://localhost:4000"
     ):
         self.question = question
         self.hitl_type = hitl_type
         self.choices = choices
+        self.context = context
         self.timeout = timeout
         self.observability_url = observability_url
         self.response_port = self._find_free_port()
@@ -71,7 +73,7 @@ class HITLRequest:
 
     def get_hitl_data(self) -> Dict[str, Any]:
         """Get HITL data for inclusion in HookEvent"""
-        return {
+        data = {
             "question": self.question,
             "responseWebSocketUrl": f"ws://localhost:{self.response_port}",
             "type": self.hitl_type,
@@ -79,6 +81,9 @@ class HITLRequest:
             "timeout": self.timeout,
             "requiresResponse": True
         }
+        if self.context:
+            data["context"] = self.context
+        return data
 
     def send_and_wait(
         self,
@@ -180,3 +185,161 @@ def ask_choice(
         session_data
     )
     return response.get("choice") if response else None
+
+
+# ApprovalResponse type for type hints
+class ApprovalResponse:
+    """Response from ask_approval()"""
+    def __init__(self, approved: bool, comment: Optional[str] = None):
+        self.approved = approved
+        self.comment = comment
+
+    def __bool__(self):
+        return self.approved
+
+
+def ask_approval(
+    question: str,
+    session_data: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+    hook_event_type: str = "PreToolUse",
+    payload: Optional[Dict[str, Any]] = None,
+    timeout: int = 300
+) -> ApprovalResponse:
+    """
+    Ask for approval with optional comment (voice or text input).
+
+    Use for pre-hooks that need human approval before continuing.
+
+    Args:
+        question: The approval question to show (e.g., "Allow rm -rf command?")
+        session_data: Session information (session_id, source_app, etc.)
+        context: Additional context (e.g., tool_name, command details)
+        hook_event_type: The hook event type (default: PreToolUse)
+        payload: The original hook payload
+        timeout: Timeout in seconds (default: 5 minutes)
+
+    Returns:
+        ApprovalResponse with .approved (bool) and .comment (optional str)
+
+    Example:
+        result = ask_approval(
+            "Allow dangerous rm -rf command?",
+            session_data,
+            context={"tool_name": "Bash", "command": "rm -rf /tmp/test"},
+            payload=original_payload
+        )
+        if result.approved:
+            print(f"Approved! Comment: {result.comment}")
+            sys.exit(0)  # Allow
+        else:
+            print(f"Denied. Reason: {result.comment}")
+            sys.exit(2)  # Block
+    """
+    hitl = HITLRequest(
+        question,
+        hitl_type='approval',
+        context=context,
+        timeout=timeout
+    )
+    response = hitl.send_and_wait(
+        {"hook_event_type": hook_event_type, "payload": payload or {}},
+        session_data
+    )
+
+    if response:
+        return ApprovalResponse(
+            approved=response.get("approved", False),
+            comment=response.get("comment")
+        )
+
+    # Timeout or error - deny by default
+    return ApprovalResponse(approved=False, comment="Timeout - no response received")
+
+
+# QuestionResponse type for ask_question_via_hitl
+class QuestionInputResponse:
+    """Response from ask_question_via_hitl()"""
+    def __init__(self, answered: bool, response: Optional[str] = None, cancelled: bool = False):
+        self.answered = answered
+        self.response = response
+        self.cancelled = cancelled
+
+    def __bool__(self):
+        return self.answered and self.response is not None
+
+
+def ask_question_via_hitl(
+    question: str,
+    session_data: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+    hook_event_type: str = "PreToolUse",
+    payload: Optional[Dict[str, Any]] = None,
+    timeout: int = 300
+) -> QuestionInputResponse:
+    """
+    Redirect Claude's AskUserQuestion to the observability UI with voice input support.
+
+    This intercepts questions Claude wants to ask and routes them through
+    the HITL system so users can respond via the dashboard with voice or text.
+
+    Args:
+        question: The question Claude wants to ask the user
+        session_data: Session information (session_id, source_app, etc.)
+        context: Additional context (e.g., question options, type)
+        hook_event_type: The hook event type (default: PreToolUse)
+        payload: The original hook payload
+        timeout: Timeout in seconds (default: 5 minutes)
+
+    Returns:
+        QuestionInputResponse with .answered (bool), .response (str), .cancelled (bool)
+
+    Example:
+        result = ask_question_via_hitl(
+            "Which database should I use for this project?",
+            session_data,
+            context={"options": ["PostgreSQL", "MySQL", "MongoDB"]},
+            payload=original_payload
+        )
+        if result.answered:
+            print(f"User answered: {result.response}")
+            # Return the answer to Claude
+        elif result.cancelled:
+            print("User cancelled the question")
+            sys.exit(2)  # Block the tool
+    """
+    hitl = HITLRequest(
+        question,
+        hitl_type='question_input',
+        context=context,
+        timeout=timeout
+    )
+    response = hitl.send_and_wait(
+        {"hook_event_type": hook_event_type, "payload": payload or {}},
+        session_data
+    )
+
+    if response:
+        # Check if user cancelled
+        if response.get("cancelled", False):
+            return QuestionInputResponse(
+                answered=False,
+                response=None,
+                cancelled=True
+            )
+
+        # User provided a response
+        user_response = response.get("response")
+        if user_response:
+            return QuestionInputResponse(
+                answered=True,
+                response=user_response,
+                cancelled=False
+            )
+
+    # Timeout or error
+    return QuestionInputResponse(
+        answered=False,
+        response=None,
+        cancelled=False
+    )

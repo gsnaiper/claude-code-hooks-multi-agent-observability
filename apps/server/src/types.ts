@@ -2,10 +2,11 @@
 export interface HumanInTheLoop {
   question: string;
   responseWebSocketUrl: string;
-  type: 'question' | 'permission' | 'choice';
+  type: 'question' | 'permission' | 'choice' | 'approval' | 'question_input';
   choices?: string[]; // For multiple choice questions
   timeout?: number; // Optional timeout in seconds
   requiresResponse?: boolean; // Whether response is required or optional
+  context?: Record<string, any>; // Additional context for approval (e.g., tool_name, command)
 }
 
 // Response interface
@@ -13,6 +14,9 @@ export interface HumanInTheLoopResponse {
   response?: string;
   permission?: boolean;
   choice?: string; // Selected choice from options
+  approved?: boolean; // For 'approval' type - whether action was approved
+  comment?: string; // Optional comment for approval/denial
+  cancelled?: boolean; // For 'question_input' type - whether user cancelled
   hookEvent: HookEvent;
   respondedAt: number;
   respondedBy?: string; // Optional user identifier
