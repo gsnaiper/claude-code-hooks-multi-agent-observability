@@ -4,12 +4,18 @@
 # dependencies = [
 #     "anthropic",
 #     "python-dotenv",
+#     "redis",
 # ]
 # ///
 
 """
 Multi-Agent Observability Hook Script
 Sends Claude Code hook events to the observability server.
+
+Features:
+- Direct HTTP POST to server (primary)
+- Redis queue fallback when server unavailable
+- WSL PowerShell fallback for Windows connectivity
 """
 
 import json
@@ -23,6 +29,7 @@ from datetime import datetime
 from utils.summarizer import generate_event_summary
 from utils.model_extractor import get_model_from_transcript
 from utils.dedup import is_duplicate_event, get_content_hash
+from utils.redis_cache import get_hook_cache
 
 def is_wsl():
     """Detect if running in WSL."""
@@ -32,15 +39,60 @@ def is_wsl():
     except:
         return False
 
+def validate_server_url(url: str) -> bool:
+    """
+    Validate server URL to prevent command injection.
+    Only allows localhost URLs for security.
+    """
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+        # Only allow http/https to localhost
+        if parsed.scheme not in ('http', 'https'):
+            return False
+        # Allow localhost, 127.0.0.1, or [::1]
+        allowed_hosts = ('localhost', '127.0.0.1', '[::1]', '::1')
+        if parsed.hostname not in allowed_hosts:
+            return False
+        # Validate port is numeric
+        if parsed.port is not None and not isinstance(parsed.port, int):
+            return False
+        return True
+    except Exception:
+        return False
+
+def escape_json_for_powershell(json_str: str) -> str:
+    """
+    Escape JSON string for safe embedding in PowerShell here-string.
+    Replaces characters that could break out of here-string.
+    """
+    # Here-strings in PowerShell end with '@ on a new line
+    # We need to escape any '@ patterns and control characters
+    escaped = json_str.replace("'@", "'`@")  # Escape here-string terminator
+    return escaped
+
 def send_via_powershell(event_data, server_url):
-    """Send event using PowerShell (for WSL-to-Windows connectivity)."""
+    """
+    Send event using PowerShell (for WSL-to-Windows connectivity).
+
+    Security: Only allows localhost URLs to prevent command injection.
+    """
+    # SECURITY: Validate URL before using in PowerShell
+    if not validate_server_url(server_url):
+        print(f"[Hook] PowerShell fallback rejected: URL must be localhost", file=sys.stderr)
+        return False
+
     try:
         import base64
         json_body = json.dumps(event_data)
-        # Encode as UTF-16LE Base64 for PowerShell -EncodedCommand
+
+        # SECURITY: Escape JSON for PowerShell here-string
+        escaped_json = escape_json_for_powershell(json_body)
+
+        # SECURITY: URL already validated as localhost
         ps_script = f"""
 $body = @'
-{json_body}
+{escaped_json}
 '@
 Invoke-RestMethod -Method Post -Uri '{server_url}' -ContentType 'application/json' -Body $body
 """
@@ -52,8 +104,31 @@ Invoke-RestMethod -Method Post -Uri '{server_url}' -ContentType 'application/jso
         print(f"PowerShell fallback failed: {e}", file=sys.stderr)
         return False
 
-def send_event_to_server(event_data, server_url='http://localhost:4000/events'):
-    """Send event data to the observability server."""
+def queue_event_fallback(event_data) -> bool:
+    """Queue event to Redis as fallback when server is unavailable."""
+    try:
+        cache = get_hook_cache()
+        if cache.is_redis_available:
+            if cache.queue_event(event_data):
+                print("[Hook] Event queued to Redis (server unavailable)", file=sys.stderr)
+                return True
+    except Exception as e:
+        print(f"[Hook] Queue fallback failed: {e}", file=sys.stderr)
+    return False
+
+
+def send_event_to_server(event_data, server_url='http://localhost:4000/events', use_queue_fallback=True):
+    """
+    Send event data to the observability server.
+
+    Args:
+        event_data: Event data to send
+        server_url: Server URL
+        use_queue_fallback: If True, queue to Redis when server unavailable
+
+    Returns:
+        True if sent successfully (or queued as fallback)
+    """
     try:
         # Prepare the request
         req = urllib.request.Request(
@@ -64,23 +139,33 @@ def send_event_to_server(event_data, server_url='http://localhost:4000/events'):
                 'User-Agent': 'Claude-Code-Hook/1.0'
             }
         )
-        
+
         # Send the request
         with urllib.request.urlopen(req, timeout=5) as response:
             if response.status == 200:
                 return True
             else:
                 print(f"Server returned status: {response.status}", file=sys.stderr)
+                if use_queue_fallback:
+                    return queue_event_fallback(event_data)
                 return False
-                
+
     except urllib.error.URLError as e:
         # WSL-to-Windows fallback: use PowerShell if urllib fails
         if is_wsl():
-            return send_via_powershell(event_data, server_url)
+            if send_via_powershell(event_data, server_url):
+                return True
+
+        # Queue fallback when server is unavailable
+        if use_queue_fallback:
+            return queue_event_fallback(event_data)
+
         print(f"Failed to send event: {e}", file=sys.stderr)
         return False
     except Exception as e:
         print(f"Unexpected error: {e}", file=sys.stderr)
+        if use_queue_fallback:
+            return queue_event_fallback(event_data)
         return False
 
 def get_auto_project_id(cwd: str = None) -> str:

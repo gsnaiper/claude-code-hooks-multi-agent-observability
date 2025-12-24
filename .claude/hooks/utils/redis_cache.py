@@ -313,7 +313,7 @@ class HookCache:
         count: int = 10
     ) -> list:
         """
-        Get queued events from Redis Stream.
+        Get queued events from Redis Stream (reads from beginning).
 
         Args:
             stream: Redis stream name (alphanumeric, underscore, hyphen only)
@@ -339,6 +339,205 @@ class HookCache:
             return []
         except Exception as e:
             print(f"[HookCache] Queue read error: {e}")
+            return []
+
+    def ensure_consumer_group(
+        self,
+        stream: str = "hook_events",
+        group: str = "event_processors"
+    ) -> bool:
+        """
+        Create consumer group if it doesn't exist.
+
+        Args:
+            stream: Redis stream name
+            group: Consumer group name
+
+        Returns:
+            True if group exists or was created
+        """
+        if not self.redis:
+            return False
+
+        if not VALID_STREAM_NAME.match(stream) or not VALID_STREAM_NAME.match(group):
+            return False
+
+        try:
+            # Try to create group, ignore error if already exists
+            self.redis.xgroup_create(stream, group, id='0', mkstream=True)
+            return True
+        except Exception as e:
+            if "BUSYGROUP" in str(e):
+                return True  # Group already exists
+            print(f"[HookCache] Consumer group error: {e}")
+            return False
+
+    def consume_events(
+        self,
+        stream: str = "hook_events",
+        group: str = "event_processors",
+        consumer: str = "worker-1",
+        count: int = 10,
+        block_ms: int = 5000
+    ) -> list:
+        """
+        Read unprocessed events from Redis Stream using consumer group.
+
+        Args:
+            stream: Redis stream name
+            group: Consumer group name
+            consumer: Consumer name (unique per worker)
+            count: Max events to retrieve
+            block_ms: Block timeout in milliseconds (0 = no block)
+
+        Returns:
+            List of (id, data) tuples for unacknowledged events
+        """
+        if not self.redis:
+            return []
+
+        if not VALID_STREAM_NAME.match(stream) or not VALID_STREAM_NAME.match(group):
+            return []
+
+        try:
+            # '>' means only new messages not yet delivered to this group
+            events = self.redis.xreadgroup(
+                group, consumer,
+                {stream: '>'},
+                count=count,
+                block=block_ms
+            )
+            if events:
+                return [(e[0].decode(), {
+                    k.decode(): v.decode() for k, v in e[1].items()
+                }) for e in events[0][1]]
+            return []
+        except Exception as e:
+            print(f"[HookCache] Consume error: {e}")
+            return []
+
+    def ack_event(
+        self,
+        event_id: str,
+        stream: str = "hook_events",
+        group: str = "event_processors"
+    ) -> bool:
+        """
+        Acknowledge event as processed.
+
+        Args:
+            event_id: Redis stream event ID
+            stream: Redis stream name
+            group: Consumer group name
+
+        Returns:
+            True if acknowledged
+        """
+        if not self.redis:
+            return False
+
+        try:
+            self.redis.xack(stream, group, event_id)
+            return True
+        except Exception as e:
+            print(f"[HookCache] ACK error: {e}")
+            return False
+
+    def get_pending_events(
+        self,
+        stream: str = "hook_events",
+        group: str = "event_processors",
+        count: int = 100
+    ) -> list:
+        """
+        Get pending (unacknowledged) events for replay/debugging.
+
+        Returns:
+            List of pending event info
+        """
+        if not self.redis:
+            return []
+
+        try:
+            pending = self.redis.xpending_range(stream, group, '-', '+', count)
+            return [
+                {
+                    'id': p['message_id'].decode(),
+                    'consumer': p['consumer'].decode(),
+                    'idle_time_ms': p['time_since_delivered'],
+                    'delivery_count': p['times_delivered']
+                }
+                for p in pending
+            ]
+        except Exception as e:
+            print(f"[HookCache] Pending error: {e}")
+            return []
+
+    def get_stream_info(self, stream: str = "hook_events") -> Optional[Dict[str, Any]]:
+        """
+        Get stream statistics for monitoring.
+
+        Returns:
+            Dict with stream info or None
+        """
+        if not self.redis:
+            return None
+
+        try:
+            info = self.redis.xinfo_stream(stream)
+            return {
+                'length': info['length'],
+                'first_entry': info.get('first-entry'),
+                'last_entry': info.get('last-entry'),
+                'groups': info.get('groups', 0)
+            }
+        except Exception as e:
+            print(f"[HookCache] Stream info error: {e}")
+            return None
+
+    def claim_stale_events(
+        self,
+        stream: str = "hook_events",
+        group: str = "event_processors",
+        consumer: str = "worker-1",
+        min_idle_ms: int = 60000,
+        count: int = 10
+    ) -> list:
+        """
+        Claim events that have been pending too long (dead consumer recovery).
+
+        Args:
+            min_idle_ms: Minimum idle time before claiming (default 60s)
+
+        Returns:
+            List of claimed (id, data) tuples
+        """
+        if not self.redis:
+            return []
+
+        try:
+            # Get pending events
+            pending = self.redis.xpending_range(stream, group, '-', '+', count)
+            stale_ids = [
+                p['message_id'] for p in pending
+                if p['time_since_delivered'] >= min_idle_ms
+            ]
+
+            if not stale_ids:
+                return []
+
+            # Claim the stale events
+            claimed = self.redis.xclaim(
+                stream, group, consumer,
+                min_idle_time=min_idle_ms,
+                message_ids=stale_ids
+            )
+
+            return [(e[0].decode(), {
+                k.decode(): v.decode() for k, v in e[1].items()
+            }) for e in claimed]
+        except Exception as e:
+            print(f"[HookCache] Claim error: {e}")
             return []
 
     # ========== Session Context ==========
