@@ -24,16 +24,21 @@ export function useProjects() {
       if (query?.limit) params.set('limit', String(query.limit))
 
       const url = `${API_BASE_URL}/api/projects${params.toString() ? '?' + params.toString() : ''}`
+      console.log('[useProjects] Fetching from:', url)
       const response = await fetch(url)
       const data = await response.json()
+      console.log('[useProjects] Response:', data)
 
       if (data.success) {
         projects.value = data.data
+        console.log('[useProjects] Loaded', projects.value.length, 'projects')
       } else {
         error.value = data.error || 'Failed to fetch projects'
+        console.error('[useProjects] Error:', error.value)
       }
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Network error'
+      console.error('[useProjects] Catch error:', e)
     } finally {
       isLoading.value = false
     }

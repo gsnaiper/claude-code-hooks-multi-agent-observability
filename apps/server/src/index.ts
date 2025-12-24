@@ -135,12 +135,25 @@ const server = Bun.serve({
       'http://localhost:5173',
       'http://192.168.15.7:5173',
       'https://cli.di4.dev',
-      'http://cli.di4.dev'
+      'http://cli.di4.dev',
+      'https://observability.di4.dev',
+      'http://observability.di4.dev',
+      'https://hooks.di4.dev',
+      'http://hooks.di4.dev',
+      'https://ai.di4.dev',
+      'http://ai.di4.dev'
     ];
 
     // Handle CORS with dynamic origin
     const origin = req.headers.get('origin') || '';
-    const allowOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+    // Allow localhost/LAN origins in dev, plus any *.di4.dev domain
+    const isDevOrigin = origin.startsWith('http://localhost:') ||
+                        origin.startsWith('http://127.0.0.1:') ||
+                        origin.startsWith('http://172.') ||
+                        origin.startsWith('http://192.168.') ||
+                        origin.startsWith('http://10.');
+    const isPublicDomain = origin.endsWith('.di4.dev') || origin.endsWith('.di4.ru');
+    const allowOrigin = ALLOWED_ORIGINS.includes(origin) || isDevOrigin || isPublicDomain ? origin : ALLOWED_ORIGINS[0];
 
     const headers = {
       'Access-Control-Allow-Origin': allowOrigin,
