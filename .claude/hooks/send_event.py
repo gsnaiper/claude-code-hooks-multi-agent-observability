@@ -22,6 +22,7 @@ import subprocess
 from datetime import datetime
 from utils.summarizer import generate_event_summary
 from utils.model_extractor import get_model_from_transcript
+from utils.dedup import is_duplicate_event, get_content_hash
 
 def is_wsl():
     """Detect if running in WSL."""
@@ -144,16 +145,23 @@ def main():
     parser.add_argument('--summarize', action='store_true', help='Generate AI summary of the event')
 
     args = parser.parse_args()
-    
+
     try:
         # Read hook data from stdin
         input_data = json.load(sys.stdin)
     except json.JSONDecodeError as e:
         print(f"Failed to parse JSON input: {e}", file=sys.stderr)
         sys.exit(1)
-    
-    # Extract model name from transcript (with caching)
+
+    # Check for duplicate events
     session_id = input_data.get('session_id', 'unknown')
+    content_hash = get_content_hash(input_data)
+
+    if is_duplicate_event(args.event_type, session_id, content_hash):
+        # Skip duplicate event
+        sys.exit(0)
+
+    # Extract model name from transcript (with caching)
     transcript_path = input_data.get('transcript_path', '')
     model_name = ''
     if transcript_path:

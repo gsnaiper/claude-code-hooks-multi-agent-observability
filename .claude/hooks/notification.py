@@ -14,6 +14,7 @@ import subprocess
 import random
 from pathlib import Path
 from utils.constants import ensure_session_log_dir
+from utils.dedup import is_duplicate_event
 
 try:
     from dotenv import load_dotenv
@@ -89,12 +90,16 @@ def main():
         parser = argparse.ArgumentParser()
         parser.add_argument('--notify', action='store_true', help='Enable TTS notifications')
         args = parser.parse_args()
-        
+
         # Read JSON input from stdin
         input_data = json.loads(sys.stdin.read())
-        
+
         # Extract session_id
         session_id = input_data.get('session_id', 'unknown')
+
+        # Check for duplicate event
+        if is_duplicate_event(session_id, "Notification", input_data):
+            sys.exit(0)
         
         # Ensure session log directory exists
         log_dir = ensure_session_log_dir(session_id)
