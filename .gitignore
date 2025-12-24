@@ -271,3 +271,5 @@ ai_docs/haiku45/*
 trees/
 
 deep_docs
+# LanceDB and model cache
+apps/server/data/
