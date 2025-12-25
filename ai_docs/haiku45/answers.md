@@ -1,145 +1,248 @@
 # AI Documentation Q&A - haiku45
 
 ## Fetch Results
-- ✅ Success: https://docs.claude.com/en/docs/claude-code/hooks → hooks.md
-- ✅ Success: https://docs.claude.com/en/docs/claude-code/sub-agents → sub-agents.md
-- ✅ Success: https://docs.claude.com/en/docs/claude-code/skills → skills.md
-- ✅ Success: https://docs.claude.com/en/docs/claude-code/plugins → plugins.md
-- ✅ Success: https://blog.google/technology/google-deepmind/gemini-computer-use-model/ → gemini-computer-use.md
-- ✅ Success: https://developers.openai.com/blog/realtime-api → openai-realtime-api.md
-- ✅ Success: https://developers.openai.com/blog/responses-api → openai-responses-api.md
+- ✅ Success: https://docs.claude.com/en/docs/claude-code/sub-agents → ai_docs/haiku45/sub-agents.md
+- ✅ Success: https://docs.claude.com/en/docs/claude-code/slash-commands → ai_docs/haiku45/slash-commands.md
+- ✅ Success: https://docs.claude.com/en/docs/claude-code/skills → ai_docs/haiku45/skills.md
+- ✅ Success: https://docs.claude.com/en/docs/claude-code/mcp → ai_docs/haiku45/mcp.md
+- ✅ Success: https://docs.anthropic.com/en/docs/claude-code/hooks → ai_docs/haiku45/hooks.md
+- ✅ Success: https://docs.claude.com/en/docs/claude-code/plugins → ai_docs/haiku45/plugins.md
+- ✅ Success: https://blog.google/technology/google-deepmind/gemini-computer-use-model/ → ai_docs/haiku45/gemini-computer-use.md
+- ✅ Success: https://developers.openai.com/blog/realtime-api → ai_docs/haiku45/openai-realtime-api.md
+- ✅ Success: https://developers.openai.com/blog/responses-api → ai_docs/haiku45/openai-responses-api.md
 
 ## Question 1: Subagents Priority System
 
-**Answer**: The Claude Code subagent priority system determines which subagent is used when naming conflicts occur through a three-tier hierarchy:
+**What are the three different priority levels for subagents (project-level, user-level, CLI-defined), and how does the priority system determine which subagent is used when there are naming conflicts? Explain with a specific example scenario.**
 
-1. **Project-level subagents** (Highest Priority): Located in `.claude/agents/` directory, these are available only within the current project scope. They take precedence over all other subagent sources.
+Based on the documentation, Claude Code subagents have the following priority levels (from highest to lowest):
 
-2. **User-level subagents** (Lower Priority): Located in `~/.claude/agents/` directory, these are available across all projects but have lower priority than project-level subagents.
+| Priority | Type | Location | Scope |
+|----------|------|----------|-------|
+| **Highest** | Project subagents | `.claude/agents/` | Current project only |
+| **Lower** | User subagents | `~/.claude/agents/` | All projects for the user |
+| **(Dynamic)** | CLI-defined | `--agents` flag | Current session only |
 
-3. **CLI-defined subagents** (Middle Priority): Defined dynamically using the `--agents` CLI flag in JSON format, CLI-defined subagents have lower priority than project-level subagents but higher priority than user-level subagents. They are useful for quick testing, session-specific configurations, or automation scripts.
+### Priority Resolution
 
-**Specific Example Scenario**:
-Consider a project developing a security tool. The developer might have:
-- A user-level `code-reviewer` subagent (at `~/.claude/agents/code-reviewer.md`) that provides general code review capabilities
-- A project-level `code-reviewer` subagent (at `.claude/agents/code-reviewer.md`) customized for security-focused review with specific security checks
-- When Claude Code needs a code reviewer, it will automatically use the project-level version because it has the highest priority
+When there are naming conflicts, **project-level subagents take precedence over user-level subagents**. This allows teams to override personal configurations with project-specific versions.
 
-This allows teams to customize subagents for specific projects while maintaining personal baseline subagents, and enables one-off testing via CLI flags without permanently overriding existing configurations.
+### Example Scenario
+
+Consider a developer named Alex who has:
+
+1. **User-level subagent** (`~/.claude/agents/code-reviewer.md`):
+   ```yaml
+   ---
+   name: code-reviewer
+   description: Personal code reviewer focusing on Python best practices
+   tools: Read, Grep, Glob
+   model: haiku
+   ---
+   Review code for Python style and PEP 8 compliance.
+   ```
+
+2. **Project-level subagent** (`.claude/agents/code-reviewer.md` in a React project):
+   ```yaml
+   ---
+   name: code-reviewer
+   description: Team code reviewer for React/TypeScript projects
+   tools: Read, Grep, Glob, Bash
+   model: sonnet
+   ---
+   Review React components for accessibility, performance, and TypeScript best practices.
+   ```
+
+**What happens when Alex runs `> Use the code-reviewer subagent to check my changes`:**
+
+- Claude Code loads the **project-level** `code-reviewer` because it has **highest priority**
+- The React/TypeScript-focused reviewer is used instead of the Python-focused one
+- The project's tool set (including Bash) and model (Sonnet) are applied
+
+This design ensures:
+- **Team consistency**: All team members use the same project-specific subagent
+- **Project customization**: Different projects can have tailored subagents with the same name
+- **Personal fallbacks**: User-level subagents are still available in projects without overrides
 
 ## Question 2: Plugin Directory Structure
 
-**Answer**: The complete directory structure required for a comprehensive Claude Code plugin includes:
+**Explain the complete directory structure required for a plugin that includes commands, agents, skills, hooks, and MCP servers. What is the purpose of the .claude-plugin directory and what files must it contain?**
+
+### Complete Plugin Directory Structure
 
 ```
-my-plugin/
+plugin-root/
 ├── .claude-plugin/
-│   └── plugin.json           # Plugin manifest (required)
-├── commands/                  # Custom slash commands (optional)
-│   └── hello.md
-├── agents/                    # Custom agents (optional)
-│   └── helper.md
-├── hooks/                     # Event handlers (optional)
+│   └── plugin.json          # REQUIRED - Plugin manifest
+├── commands/                # Slash commands (Markdown files)
+│   ├── hello.md
+│   └── deploy.md
+├── agents/                  # Agent/subagent definitions (Markdown files)
+│   ├── code-reviewer.md
+│   └── debugger.md
+├── skills/                  # Agent Skills (SKILL.md files)
+│   └── pdf-processing/
+│       ├── SKILL.md
+│       ├── reference.md
+│       └── scripts/
+│           └── helper.py
+├── hooks/                   # Event handlers
 │   └── hooks.json
-├── skills/                    # Agent Skills (optional)
-│   └── skill-name/
-│       └── SKILL.md
-├── mcp/                       # MCP server integration (optional)
-│   └── .mcp.json
-├── README.md                  # Documentation (recommended)
-└── other-files/              # Supporting resources (optional)
+├── .mcp.json               # MCP server configurations
+└── .lsp.json               # LSP server configurations (optional)
 ```
 
-**Purpose of the .claude-plugin directory**:
-The `.claude-plugin` directory is the metadata container for the plugin. It contains critical configuration files that Claude Code reads to understand and load the plugin.
+### Purpose of `.claude-plugin/` Directory
 
-**Required files in .claude-plugin**:
-- **plugin.json**: The plugin manifest containing metadata such as:
-  - name: Unique identifier for the plugin
-  - description: What the plugin does
-  - version: Semantic version
-  - author: Plugin creator information
+The `.claude-plugin/` directory serves as the **identifier** that marks a directory as a Claude Code plugin. It contains:
 
-**Optional components**:
-- **commands/**: Directory containing custom slash command definitions (markdown files with prompts)
-- **agents/**: Directory with custom subagent definitions that integrate seamlessly
-- **hooks/**: Event handler configuration for automation (hooks.json or custom paths specified in plugin manifest)
-- **skills/**: Agent Skills that provide model-invoked capabilities
-- **mcp/**: Model Context Protocol server configuration for integrating external tools
+1. **`plugin.json`** (REQUIRED) - The plugin manifest file
 
-When a plugin is enabled, all components are automatically merged with user and project configurations, making them available throughout Claude Code. Plugin hooks use the `${CLAUDE_PLUGIN_ROOT}` environment variable to reference plugin files.
+### plugin.json Structure
+
+```json
+{
+  "name": "my-plugin",
+  "description": "Description shown in plugin manager",
+  "version": "1.0.0",
+  "author": {
+    "name": "Your Name"
+  }
+}
+```
+
+**Key fields:**
+- `name`: Unique identifier that becomes the command namespace (e.g., `/my-plugin:hello`)
+- `description`: Shown in the plugin manager UI
+- `version`: Semantic versioning for releases
+- `author`: Optional attribution information
+
+### Component Details
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| **plugin.json** | `.claude-plugin/plugin.json` | Required manifest - identifies the plugin |
+| **Commands** | `commands/*.md` | User-invoked slash commands with `$ARGUMENTS` placeholders |
+| **Agents** | `agents/*.md` | Subagent definitions with YAML frontmatter |
+| **Skills** | `skills/*/SKILL.md` | Model-invoked capabilities with optional supporting files |
+| **Hooks** | `hooks/hooks.json` | Event handlers (PreToolUse, PostToolUse, etc.) |
+| **MCP Servers** | `.mcp.json` | Model Context Protocol server configurations |
+| **LSP Servers** | `.lsp.json` | Language Server Protocol configurations |
+
+### Important Notes
+
+1. **Only `plugin.json` goes inside `.claude-plugin/`** - all other directories are at the plugin root level
+2. Slash commands are namespaced: `hello.md` becomes `/plugin-name:hello`
+3. Hooks use the same format as `settings.json` but in a dedicated `hooks.json` file
+4. Skills automatically become available when the plugin is loaded
 
 ## Question 3: Skills vs Subagents
 
-**Answer**: Agent Skills and subagents are distinct capabilities with important differences in invocation, context, and use cases:
+**How do Agent Skills differ from subagents in terms of invocation, context management, and when each should be used? Provide specific use cases where Skills are preferred over subagents and vice versa.**
 
-### Invocation Differences
+### Key Differences
 
-**Agent Skills**:
-- **Model-invoked**: Claude autonomously decides when to use a Skill based on the request content and the Skill's description
-- User doesn't explicitly invoke Skills; they activate automatically when relevant
-- Invocation is implicit and context-driven
+| Aspect | Agent Skills | Subagents |
+|--------|--------------|-----------|
+| **Invocation** | **Model-invoked** - Claude autonomously decides when to use them | **User-invoked** or **automatic delegation** based on task description |
+| **Context** | Runs within the **main conversation context** | Operates in its **own separate context window** |
+| **Scope** | Extends Claude's capabilities with instructions | Creates a specialized AI assistant with custom personality |
+| **Tool Access** | Can restrict with `allowed-tools` | Can restrict with `tools` field |
+| **Persistence** | Instructions remain in context | Context is isolated, preserving main conversation |
 
-**Subagents**:
-- **User-requested or auto-delegated**: Can be explicitly invoked by mentioning them ("Use the code-reviewer subagent") or automatically delegated based on task description and subagent description
-- Supports both explicit and implicit invocation paths
-- More direct control over when they're used
+### Invocation Comparison
 
-### Context Management Differences
+**Skills (Model-Invoked):**
+```yaml
+---
+name: pdf-processing
+description: Extract text from PDFs. Use when working with PDF files.
+---
+```
+Claude automatically invokes this skill when a user mentions PDFs without explicit instruction.
 
-**Agent Skills**:
-- Operate within the main conversation context
-- Use progressive disclosure to manage context efficiently (files loaded only when needed)
-- Add capability without isolating context
-- Good for preserving conversation continuity
+**Subagents (User-Invoked or Auto-Delegated):**
+```bash
+> Use the code-reviewer subagent to check my changes
+> Have the debugger investigate this error
+```
+Explicit invocation or Claude delegates based on task matching.
 
-**Subagents**:
-- Operate in separate context windows independent from the main conversation
-- Start with a clean slate each time invoked
-- Prevent context pollution of main conversation
-- Better for long sessions where context preservation is critical
+### Context Management
 
-### Use Cases and Preferences
+**Skills:**
+- Instructions are loaded into the **current conversation**
+- No context isolation - skill executions affect the main context
+- Best for quick, focused operations
 
-**When to use Agent Skills**:
-1. **Capability extension**: Adding specific expertise without isolating the agent (e.g., "PDF processing", "Excel analysis", "commit message generation")
-2. **Model-driven activation**: Tasks where Claude should autonomously decide if the capability applies
-3. **Context continuity**: Situations where you want the main conversation to flow naturally with added capabilities
-4. **Team workflows**: Packaging reusable expertise as discoverable capabilities within projects
-5. **Progressive expertise**: Building up Claude's capabilities incrementally
+**Subagents:**
+- Each subagent has its **own context window**
+- Prevents "context pollution" of the main conversation
+- Can be resumed later with `agentId` for continuity
+- Better for long-running or multi-step tasks
 
-**Specific examples where Skills are preferred**:
-- PDF text extraction and form filling
-- Excel spreadsheet analysis and pivot table generation
-- Git commit message generation
-- Code quality verification
-- Data analysis from log files
+### When to Use Skills (Preferred)
 
-**When to use Subagents**:
-1. **Specialized task delegation**: Delegating complete, focused tasks to specialized experts (e.g., "code-reviewer", "debugger", "data-scientist")
-2. **Explicit control**: When you want direct control over when an agent engages
-3. **Context preservation**: In long-running sessions where you need to preserve main conversation context
-4. **Tool restriction**: When you want specific agents to have limited tool access
-5. **Separate expertise areas**: Distinct problem-solving domains with specialized configurations
+1. **Quick, repeatable patterns** - Generating commit messages, code formatting
+   ```yaml
+   name: generating-commit-messages
+   description: Generates commit messages from git diffs. Use when writing commits.
+   ```
 
-**Specific examples where Subagents are preferred**:
-- A dedicated code reviewer that runs explicitly after changes
-- A debugger subagent for error investigation
-- A data scientist subagent for complex analysis queries
-- A security specialist for vulnerability assessment
-- Specialized test runners that run independently
+2. **Domain-specific knowledge** - PDF processing, data analysis
+   ```yaml
+   name: excel-analysis
+   description: Analyze Excel files. Use when working with spreadsheets or .xlsx files.
+   ```
 
-### Comparison Summary
+3. **Tool restrictions without context switch** - Read-only operations
+   ```yaml
+   name: safe-file-reader
+   allowed-tools: Read, Grep, Glob
+   ```
 
-| Aspect                | Agent Skills                | Subagents                               |
-| --------------------- | --------------------------- | --------------------------------------- |
-| **Invocation**        | Model-driven (automatic)    | User-requested or auto-delegated        |
-| **Context**           | Shared main context         | Separate context window                 |
-| **Discovery**         | Autonomous based on request | Based on explicit mention or task match |
-| **Best for**          | Adding capabilities         | Delegating specialized tasks            |
-| **Context pollution** | Minimal                     | None (isolated)                         |
-| **Session length**    | Good for preserving context | Better for very long sessions           |
-| **Tool control**      | Limited restrictions        | Full control via tool specification     |
-| **Activation**        | Implicit/automatic          | Explicit/semi-explicit                  |
+4. **Lightweight extensions** - When you want Claude to autonomously apply expertise
 
-The choice between Skills and Subagents depends on whether you want Claude to autonomously apply additional capabilities (Skills) or whether you want to explicitly delegate specialized tasks to dedicated agents (Subagents).
+### When to Use Subagents (Preferred)
+
+1. **Complex, multi-step investigations** - Debugging, root cause analysis
+   ```yaml
+   name: debugger
+   description: Debugging specialist for errors and test failures. Use proactively when encountering issues.
+   ```
+
+2. **Specialized personas requiring isolation** - Code review, security audits
+   ```yaml
+   name: security-auditor
+   description: Security expert for vulnerability assessment. Use after major changes.
+   tools: Read, Grep, Glob, Bash
+   ```
+
+3. **Long-running research tasks** - Architecture planning, documentation
+   - Can be resumed across sessions using `agentId`
+   - Context preserved without polluting main conversation
+
+4. **Chained workflows** - When multiple specialized agents need to collaborate
+   ```bash
+   > First use code-analyzer to find issues, then use optimizer to fix them
+   ```
+
+5. **Different model requirements** - Use Haiku for fast exploration, Sonnet for complex analysis
+   ```yaml
+   model: haiku  # Fast, low-latency operations
+   ```
+
+### Decision Matrix
+
+| Scenario | Use Skill | Use Subagent |
+|----------|-----------|--------------|
+| Generate commit message | ✅ | |
+| Deep code review | | ✅ |
+| PDF text extraction | ✅ | |
+| Debug complex test failure | | ✅ |
+| Format code on save | ✅ | |
+| Security vulnerability audit | | ✅ |
+| Quick file search pattern | ✅ | |
+| Multi-session research | | ✅ |
+| Lightweight helper script | ✅ | |
+| Specialized persona (reviewer, architect) | | ✅ |

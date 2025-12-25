@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue';
-import type { HookEvent, ChartDataPoint, TimeRange } from '../types';
+import type { EventSummary, ChartDataPoint, TimeRange } from '../types';
 
 export function useChartData(agentIdFilter?: string) {
   const timeRange = ref<TimeRange>('1m');
@@ -17,10 +17,10 @@ export function useChartData(agentIdFilter?: string) {
   const agentIdParsed = agentIdFilter ? parseAgentId(agentIdFilter) : null;
   
   // Store all events for re-aggregation when time range changes
-  const allEvents = ref<HookEvent[]>([]);
-  
+  const allEvents = ref<EventSummary[]>([]);
+
   // Debounce for high-frequency events
-  let eventBuffer: HookEvent[] = [];
+  let eventBuffer: EventSummary[] = [];
   let debounceTimer: number | null = null;
   const DEBOUNCE_DELAY = 50; // 50ms debounce
   
@@ -106,7 +106,7 @@ export function useChartData(agentIdFilter?: string) {
     cleanOldEvents();
   };
   
-  const addEvent = (event: HookEvent) => {
+  const addEvent = (event: EventSummary) => {
     eventBuffer.push(event);
     
     // Clear existing timer

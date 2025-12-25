@@ -14,12 +14,12 @@
 </template>
 
 <script setup lang="ts">
-import type { HookEvent, TimeRange } from '../types';
+import type { EventSummary, TimeRange } from '../types';
 import AgentSwimLane from './AgentSwimLane.vue';
 
 const props = defineProps<{
   selectedAgents: string[];
-  events: HookEvent[];
+  events: EventSummary[];
   timeRange: TimeRange;
 }>();
 

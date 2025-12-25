@@ -7,7 +7,13 @@
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "migrate": "bun run scripts/migrate-to-postgres.ts",
+    "migrate:dry-run": "bun run scripts/migrate-to-postgres.ts --dry-run",
+    "migrate:no-embeddings": "bun run scripts/migrate-to-postgres.ts --skip-embeddings",
+    "merge": "bun run scripts/full-merge-migration.ts",
+    "merge:dry-run": "bun run scripts/full-merge-migration.ts --dry-run",
+    "merge:no-embeddings": "bun run scripts/full-merge-migration.ts --skip-embeddings"
   },
   "devDependencies": {
     "@types/bun": "latest",

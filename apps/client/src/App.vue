@@ -80,41 +80,7 @@
       </div>
     </header>
 
-    <!-- Tab Navigation -->
-    <div class="flex-shrink-0 bg-[var(--theme-bg-primary)] border-b border-[var(--theme-border-primary)]">
-      <div class="flex">
-        <button
-          @click="activeTab = 'events'"
-          class="px-4 py-2 text-sm font-medium transition-colors border-b-2"
-          :class="activeTab === 'events'
-            ? 'text-[var(--theme-primary)] border-[var(--theme-primary)]'
-            : 'text-[var(--theme-text-secondary)] border-transparent hover:text-[var(--theme-text-primary)]'"
-        >
-          Events
-        </button>
-        <button
-          @click="activeTab = 'projects'; selectedProject = null"
-          class="px-4 py-2 text-sm font-medium transition-colors border-b-2"
-          :class="activeTab === 'projects'
-            ? 'text-[var(--theme-primary)] border-[var(--theme-primary)]'
-            : 'text-[var(--theme-text-secondary)] border-transparent hover:text-[var(--theme-text-primary)]'"
-        >
-          Projects
-        </button>
-      </div>
-    </div>
-
-    <!-- Events View -->
-    <template v-if="activeTab === 'events'">
-    <!-- Filters -->
-    <FilterPanel
-      v-if="showFilters"
-      class="short:hidden"
-      :filters="filters"
-      @update:filters="filters = $event"
-    />
-    
-    <!-- Live Pulse Chart -->
+    <!-- Live Pulse Chart (Always Visible) -->
     <LivePulseChart
       :events="events"
       :filters="filters"
@@ -123,50 +89,41 @@
       @update-time-range="currentTimeRange = $event"
     />
 
-    <!-- Agent Swim Lane Container (below pulse chart, full width, hidden when empty) -->
-    <div v-if="selectedAgentLanes.length > 0" class="w-full bg-[var(--theme-bg-secondary)] px-3 py-4 mobile:px-2 mobile:py-2 overflow-hidden">
-      <AgentSwimLaneContainer
-        :selected-agents="selectedAgentLanes"
-        :events="events"
-        :time-range="currentTimeRange"
-        @update:selected-agents="selectedAgentLanes = $event"
-      />
-    </div>
-    
-    <!-- Timeline -->
-    <div class="flex flex-col flex-1 overflow-hidden">
-      <EventTimeline
-        :events="events"
-        :filters="filters"
-        :unique-app-names="uniqueAppNames"
-        :all-app-names="allAppNames"
-        v-model:stick-to-bottom="stickToBottom"
-        @select-agent="toggleAgentLane"
-      />
-    </div>
-
-    <!-- Stick to bottom button -->
-    <StickScrollButton
-      class="short:hidden"
-      :stick-to-bottom="stickToBottom"
-      @toggle="stickToBottom = !stickToBottom"
-    />
-    </template>
-
-    <!-- Projects View -->
-    <template v-else-if="activeTab === 'projects'">
-      <div class="flex-1 overflow-hidden bg-[var(--theme-bg-primary)]">
-        <ProjectDetail
-          v-if="selectedProject"
-          :project="selectedProject"
-          @back="handleProjectBack"
-        />
-        <ProjectList
-          v-else
-          @select="handleProjectSelect"
-        />
+    <!-- Tab Navigation -->
+    <div class="flex-shrink-0 bg-[var(--theme-bg-primary)] border-b border-[var(--theme-border-primary)]">
+      <div class="flex">
+        <router-link
+          to="/events"
+          class="px-4 py-2 text-sm font-medium transition-colors border-b-2"
+          :class="route.name === 'events'
+            ? 'text-[var(--theme-primary)] border-[var(--theme-primary)]'
+            : 'text-[var(--theme-text-secondary)] border-transparent hover:text-[var(--theme-text-primary)]'"
+        >
+          Events
+        </router-link>
+        <router-link
+          to="/projects"
+          class="px-4 py-2 text-sm font-medium transition-colors border-b-2"
+          :class="route.name === 'projects' || route.name === 'project-detail'
+            ? 'text-[var(--theme-primary)] border-[var(--theme-primary)]'
+            : 'text-[var(--theme-text-secondary)] border-transparent hover:text-[var(--theme-text-primary)]'"
+        >
+          Projects
+        </router-link>
       </div>
-    </template>
+    </div>
+
+    <!-- Router View with Keep-Alive for fast tab switching -->
+    <router-view v-slot="{ Component }">
+      <keep-alive>
+        <component
+          :is="Component"
+          @update:filters="filters = $event"
+          @update:selectedAgentLanes="selectedAgentLanes = $event"
+          @selectAgent="toggleAgentLane"
+        />
+      </keep-alive>
+    </router-view>
     
     <!-- Error message -->
     <div
@@ -218,29 +175,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue';
-import type { TimeRange, HookEvent, EventTimeRange } from './types';
+import { ref, watch, computed, provide } from 'vue';
+import { useRoute } from 'vue-router';
+import type { TimeRange, EventSummary, EventTimeRange } from './types';
 import { useWebSocket } from './composables/useWebSocket';
 import { useThemes } from './composables/useThemes';
 import { useEventColors } from './composables/useEventColors';
 import { useVoiceNotifications } from './composables/useVoiceNotifications';
-import EventTimeline from './components/EventTimeline.vue';
-import FilterPanel from './components/FilterPanel.vue';
-import StickScrollButton from './components/StickScrollButton.vue';
 import LivePulseChart from './components/LivePulseChart.vue';
 import ThemeManager from './components/ThemeManager.vue';
 import ToastNotification from './components/ToastNotification.vue';
-import AgentSwimLaneContainer from './components/AgentSwimLaneContainer.vue';
 import VoiceSettingsPanel from './components/VoiceSettingsPanel.vue';
-import ProjectList from './components/ProjectList.vue';
-import ProjectDetail from './components/ProjectDetail.vue';
 import SessionTranscriptPage from './components/SessionTranscriptPage.vue';
 import { WS_URL } from './config';
-import type { Project } from './types';
 
 // Check for transcript mode (opened in new window)
 const urlParams = new URLSearchParams(window.location.search);
 const transcriptSessionId = urlParams.get('transcript');
+
+// Router
+const route = useRoute();
 
 // WebSocket connection
 const { events, isConnected, error, clearEvents } = useWebSocket(WS_URL);
@@ -305,7 +259,7 @@ watch(events, (newEvents) => {
   if (newEvents.length > lastEventCount) {
     // Process only new events
     const newEventsList = newEvents.slice(lastEventCount);
-    newEventsList.forEach((event: HookEvent) => {
+    newEventsList.forEach((event: EventSummary) => {
       notifyEvent(event);
     });
   }
@@ -334,18 +288,16 @@ const allAppNames = ref<string[]>([]); // All apps ever seen in session
 const selectedAgentLanes = ref<string[]>([]);
 const currentTimeRange = ref<TimeRange>('1m'); // Current time range from LivePulseChart
 
-// Tab navigation state
-const activeTab = ref<'events' | 'projects'>('events');
-const selectedProject = ref<Project | null>(null);
-
-// Handle project selection
-const handleProjectSelect = (project: Project) => {
-  selectedProject.value = project;
-};
-
-const handleProjectBack = () => {
-  selectedProject.value = null;
-};
+// Provide shared state for child views
+provide('events', events);
+provide('isConnected', isConnected);
+provide('filters', filters);
+provide('showFilters', showFilters);
+provide('uniqueAppNames', uniqueAppNames);
+provide('allAppNames', allAppNames);
+provide('selectedAgentLanes', selectedAgentLanes);
+provide('currentTimeRange', currentTimeRange);
+provide('stickToBottom', stickToBottom);
 
 // Toast notifications
 interface Toast {

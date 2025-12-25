@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue';
-import type { HookEvent } from '../types';
+import type { EventSummary } from '../types';
 
 export function useEventSearch() {
   const searchPattern = ref<string>('');
@@ -21,7 +21,7 @@ export function useEventSearch() {
   };
 
   // Extract searchable text from event
-  const getSearchableText = (event: HookEvent): string => {
+  const getSearchableText = (event: EventSummary): string => {
     const parts: string[] = [];
 
     // Event type
@@ -38,8 +38,8 @@ export function useEventSearch() {
     }
 
     // Model name
-    if (event.model) {
-      parts.push(event.model);
+    if (event.model_name) {
+      parts.push(event.model_name);
     }
 
     // Tool information
@@ -49,8 +49,8 @@ export function useEventSearch() {
     if (event.tool_command) {
       parts.push(event.tool_command);
     }
-    if (event.tool_file && event.tool_file.path) {
-      parts.push(event.tool_file.path);
+    if (event.tool_file_path) {
+      parts.push(event.tool_file_path);
     }
 
     // Summary text
@@ -58,19 +58,16 @@ export function useEventSearch() {
       parts.push(event.summary);
     }
 
-    // HITL information
-    if (event.hitl_question) {
-      parts.push(event.hitl_question);
-    }
-    if (event.hitl_permission) {
-      parts.push(event.hitl_permission);
+    // HITL type
+    if (event.hitl_type) {
+      parts.push(event.hitl_type);
     }
 
     return parts.join(' ').toLowerCase();
   };
 
   // Check if event matches pattern
-  const matchesPattern = (event: HookEvent, pattern: string): boolean => {
+  const matchesPattern = (event: EventSummary, pattern: string): boolean => {
     if (!pattern || pattern.trim() === '') {
       return true;
     }
@@ -90,7 +87,7 @@ export function useEventSearch() {
   };
 
   // Filter events by pattern
-  const searchEvents = (events: HookEvent[], pattern: string): HookEvent[] => {
+  const searchEvents = (events: EventSummary[], pattern: string): EventSummary[] => {
     if (!pattern || pattern.trim() === '') {
       return events;
     }

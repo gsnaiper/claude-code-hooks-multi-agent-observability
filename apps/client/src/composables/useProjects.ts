@@ -157,6 +157,35 @@ export function useProjects() {
     }
   }
 
+  // Create new project (manual)
+  async function createProject(project: Omit<Project, 'createdAt' | 'updatedAt'>): Promise<Project | null> {
+    isLoading.value = true
+    error.value = null
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(project)
+      })
+      const data = await response.json()
+
+      if (data.success) {
+        // Add to local list
+        projects.value = [...projects.value, data.data]
+        return data.data
+      } else {
+        error.value = data.error || 'Failed to create project'
+        return null
+      }
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Network error'
+      return null
+    } finally {
+      isLoading.value = false
+    }
+  }
+
   // Select a project and load its sessions
   async function selectProject(project: Project | null): Promise<void> {
     selectedProject.value = project
@@ -230,6 +259,7 @@ export function useProjects() {
     fetchProjectSessions,
     updateProject,
     archiveProject,
+    createProject,
     selectProject,
     reassignSession,
 

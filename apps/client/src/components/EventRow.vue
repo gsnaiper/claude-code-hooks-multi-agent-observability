@@ -516,7 +516,7 @@ const props = defineProps<{
 }>();
 
 // Event detail loading
-const { fetchEventDetail, isLoading: isLoadingDetail, getCached } = useEventDetail();
+const { fetchEventDetail, isLoading: isLoadingDetail } = useEventDetail();
 const fullEvent = ref<HookEvent | null>(null);
 const detailLoadError = ref<string | null>(null);
 

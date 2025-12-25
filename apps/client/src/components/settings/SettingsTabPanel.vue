@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
 import type { SettingType } from '../../types'
 
-const props = defineProps<{
+defineProps<{
   activeTab: SettingType
   counts: Record<SettingType, number>
 }>()

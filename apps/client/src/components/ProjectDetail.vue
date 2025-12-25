@@ -32,6 +32,18 @@
           </p>
         </div>
 
+        <!-- Open All Terminals button -->
+        <button
+          v-if="sessionsWithCwd.length > 0"
+          @click="openAllTerminals"
+          class="p-2 rounded-lg bg-[var(--theme-bg-tertiary)] text-[var(--theme-text-secondary)] hover:text-[var(--theme-primary)] transition-colors"
+          :title="`Open ${sessionsWithCwd.length} terminal(s)`"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+        </button>
+
         <!-- Settings button -->
         <button
           @click="showSettings = true"
@@ -165,6 +177,19 @@
               View Transcript
             </button>
 
+            <!-- Session Settings Button -->
+            <button
+              @click.stop="openSessionSettings(session)"
+              class="px-3 py-1.5 text-xs font-medium bg-[var(--theme-bg-tertiary)] hover:bg-[var(--theme-border-primary)] text-[var(--theme-text-secondary)] rounded-lg transition-colors"
+              title="Session-level settings overrides"
+            >
+              <svg class="w-3.5 h-3.5 inline mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              Settings
+            </button>
+
             <!-- Reassign Session Button -->
             <button
               @click.stop="openReassignModal(session)"
@@ -175,6 +200,25 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
               </svg>
               Move
+            </button>
+
+            <!-- Open Terminal Button -->
+            <button
+              v-if="session.cwd"
+              @click.stop="openTerminal(session)"
+              @mouseenter="checkTmuxAvailability(session.id)"
+              class="px-3 py-1.5 text-xs font-medium bg-[var(--theme-bg-tertiary)] hover:bg-[var(--theme-border-primary)] text-[var(--theme-text-secondary)] rounded-lg transition-colors flex items-center gap-1.5"
+              :title="getTmuxTooltip(session)"
+            >
+              <!-- Tmux status indicator -->
+              <div
+                class="w-2 h-2 rounded-full flex-shrink-0"
+                :class="getTmuxStatusColor(getTmuxStatus(session.id))"
+              ></div>
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              Terminal
             </button>
           </div>
         </div>
@@ -198,16 +242,24 @@
       @close="closeReassignModal"
       @reassign="handleSessionReassign"
     />
+
+    <!-- Session Settings Modal -->
+    <SessionSettingsModal
+      :session="sessionForSettings"
+      :visible="showSessionSettings"
+      @close="showSessionSettings = false"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import type { Project, ProjectSession } from '../types'
+import type { Project, ProjectSession, TmuxAvailability } from '../types'
 import { useProjects } from '../composables/useProjects'
 import { useEventColors } from '../composables/useEventColors'
 import ProjectSettingsModal from './ProjectSettingsModal.vue'
 import SessionReassignModal from './SessionReassignModal.vue'
+import SessionSettingsModal from './SessionSettingsModal.vue'
 
 const props = defineProps<{
   project: Project
@@ -232,7 +284,13 @@ const {
 const showSettings = ref(false)
 const showReassignModal = ref(false)
 const sessionToReassign = ref<ProjectSession | null>(null)
+const showSessionSettings = ref(false)
+const sessionForSettings = ref<ProjectSession | null>(null)
 const { getHexColorForApp } = useEventColors()
+
+// Tmux availability state
+const sessionTmuxInfo = ref<Map<string, TmuxAvailability>>(new Map())
+const checkingTmux = ref<Set<string>>(new Set())
 
 const projectColor = computed(() => getHexColorForApp(props.project.id))
 
@@ -251,6 +309,10 @@ const totalEvents = computed(() =>
 
 const totalToolCalls = computed(() =>
   sessions.value.reduce((sum, s) => sum + s.toolCallCount, 0)
+)
+
+const sessionsWithCwd = computed(() =>
+  sessions.value.filter(s => s.cwd)
 )
 
 function sessionStatusColor(status: string) {
@@ -341,6 +403,123 @@ function openReassignModal(session: ProjectSession) {
 function closeReassignModal() {
   showReassignModal.value = false
   sessionToReassign.value = null
+}
+
+// Open session settings modal
+function openSessionSettings(session: ProjectSession) {
+  sessionForSettings.value = session
+  showSessionSettings.value = true
+}
+
+// Terminal integration with ttyd
+const TTYD_URL = import.meta.env.VITE_TTYD_URL || 'https://ttyd.di4.dev'
+const API_URL = import.meta.env.VITE_API_URL || ''
+
+// Check tmux availability for a session
+async function checkTmuxAvailability(sessionId: string): Promise<TmuxAvailability | null> {
+  if (checkingTmux.value.has(sessionId)) {
+    return null // Already checking
+  }
+
+  checkingTmux.value.add(sessionId)
+
+  try {
+    const response = await fetch(`${API_URL}/api/sessions/${sessionId}/tmux`)
+    const result = await response.json()
+
+    if (result.success && result.data) {
+      const availability: TmuxAvailability = {
+        available: result.data.available,
+        tmuxInfo: result.data.tmuxInfo,
+        ttydUrl: result.data.ttydUrl,
+        error: result.data.error,
+        lastChecked: result.data.lastChecked || Date.now()
+      }
+      sessionTmuxInfo.value.set(sessionId, availability)
+      return availability
+    }
+  } catch (err) {
+    console.warn('Failed to check tmux:', err)
+  } finally {
+    checkingTmux.value.delete(sessionId)
+  }
+
+  return null
+}
+
+// Get tmux status for display
+function getTmuxStatus(sessionId: string): 'live' | 'attachable' | 'checking' | 'unavailable' {
+  if (checkingTmux.value.has(sessionId)) {
+    return 'checking'
+  }
+
+  const info = sessionTmuxInfo.value.get(sessionId)
+  if (!info || !info.available) {
+    return 'unavailable'
+  }
+
+  return info.tmuxInfo?.isAttached ? 'live' : 'attachable'
+}
+
+function getTmuxStatusColor(status: string): string {
+  switch (status) {
+    case 'live': return 'bg-green-500'
+    case 'attachable': return 'bg-yellow-500'
+    case 'checking': return 'bg-blue-500 animate-pulse'
+    default: return 'bg-gray-500'
+  }
+}
+
+function getTmuxTooltip(session: ProjectSession): string {
+  const status = getTmuxStatus(session.id)
+  const info = sessionTmuxInfo.value.get(session.id)
+
+  switch (status) {
+    case 'live':
+      return `Attach to live tmux session: ${info?.tmuxInfo?.target}`
+    case 'attachable':
+      return `Attach to tmux session: ${info?.tmuxInfo?.target}`
+    case 'checking':
+      return 'Checking tmux availability...'
+    default:
+      return 'Copy tmux command & open terminal (paste with Ctrl+Shift+V)'
+  }
+}
+
+async function openTerminal(session: ProjectSession) {
+  const shortId = session.id.slice(0, 8)
+
+  // Check if session is available in tmux
+  let tmuxData = sessionTmuxInfo.value.get(session.id)
+  if (!tmuxData) {
+    tmuxData = await checkTmuxAvailability(session.id)
+  }
+
+  if (tmuxData && tmuxData.available && tmuxData.ttydUrl) {
+    // Session found in tmux - attach directly
+    console.log('Attaching to tmux session:', tmuxData.tmuxInfo?.target)
+    window.open(tmuxData.ttydUrl, `terminal-${shortId}`)
+  } else {
+    // Fallback: copy command and open ttyd
+    const cwd = session.cwd || '~'
+    const tmuxCmd = `cd '${cwd}' && tmux new-session -A -s obs-${shortId}`
+
+    try {
+      await navigator.clipboard.writeText(tmuxCmd)
+      console.log('Command copied to clipboard:', tmuxCmd)
+    } catch (err) {
+      console.error('Failed to copy:', err)
+    }
+
+    window.open(TTYD_URL, `terminal-${shortId}`)
+  }
+}
+
+function openAllTerminals() {
+  sessionsWithCwd.value.forEach((session, i) => {
+    // Stagger popup windows to avoid browser blocking
+    setTimeout(() => openTerminal(session), i * 300)
+  })
 }
 
 // Handle session reassignment

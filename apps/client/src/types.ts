@@ -182,6 +182,25 @@ export interface ProjectSession {
   gitBranch?: string;            // git branch if available
 }
 
+// Tmux integration types
+export interface TmuxWindowInfo {
+  sessionName: string      // e.g., "ccc-DJ"
+  windowName: string       // e.g., "myproject-session-a"
+  windowIndex: number      // e.g., 0
+  target: string           // e.g., "ccc-DJ:myproject-session-a"
+  isAttached: boolean      // Is someone currently attached?
+  paneCommand?: string     // Current command running in pane
+  sessionId?: string       // Optional session ID
+}
+
+export interface TmuxAvailability {
+  available: boolean
+  tmuxInfo?: TmuxWindowInfo
+  ttydUrl?: string
+  error?: string
+  lastChecked: number
+}
+
 export interface ProjectSearchQuery {
   status?: 'active' | 'archived' | 'paused';
   query?: string;

@@ -23,7 +23,11 @@ import type {
   ProjectSearchQuery,
   ProjectSetting,
   ProjectSettingInput,
-  SettingType
+  SettingType,
+  Repository,
+  RepositoryInput,
+  SessionSetting,
+  SessionSettingInput
 } from '../types';
 
 export class PostgresAdapter implements DatabaseAdapter {
@@ -831,5 +835,98 @@ export class PostgresAdapter implements DatabaseAdapter {
       session: updatedSession!,
       movedEvents: eventCount
     };
+  }
+
+  async backfillSessionMetadata(): Promise<{ updated: number; skipped: number }> {
+    // TODO: Implement for Postgres
+    console.warn('[PostgresAdapter] backfillSessionMetadata not implemented');
+    return { updated: 0, skipped: 0 };
+  }
+
+  // ============================================
+  // Repository Operations (Stubs)
+  // ============================================
+
+  async getProjectRepositories(projectId: string): Promise<Repository[]> {
+    console.warn('[PostgresAdapter] getProjectRepositories not implemented');
+    return [];
+  }
+
+  async getRepository(id: string): Promise<Repository | null> {
+    console.warn('[PostgresAdapter] getRepository not implemented');
+    return null;
+  }
+
+  async insertRepository(projectId: string, input: RepositoryInput): Promise<Repository> {
+    throw new Error('[PostgresAdapter] insertRepository not implemented');
+  }
+
+  async updateRepository(id: string, updates: Partial<RepositoryInput>): Promise<Repository | null> {
+    console.warn('[PostgresAdapter] updateRepository not implemented');
+    return null;
+  }
+
+  async deleteRepository(id: string): Promise<boolean> {
+    console.warn('[PostgresAdapter] deleteRepository not implemented');
+    return false;
+  }
+
+  async setPrimaryRepository(projectId: string, repoId: string): Promise<boolean> {
+    console.warn('[PostgresAdapter] setPrimaryRepository not implemented');
+    return false;
+  }
+
+  // ============================================
+  // Session Settings Operations (Stubs)
+  // ============================================
+
+  async getSessionSettings(sessionId: string, type?: SettingType): Promise<SessionSetting[]> {
+    console.warn('[PostgresAdapter] getSessionSettings not implemented');
+    return [];
+  }
+
+  async getSessionSetting(sessionId: string, type: SettingType, key: string): Promise<SessionSetting | null> {
+    console.warn('[PostgresAdapter] getSessionSetting not implemented');
+    return null;
+  }
+
+  async insertSessionSetting(sessionId: string, type: SettingType, input: SessionSettingInput): Promise<SessionSetting> {
+    throw new Error('[PostgresAdapter] insertSessionSetting not implemented');
+  }
+
+  async updateSessionSetting(id: string, updates: Partial<SessionSettingInput>): Promise<SessionSetting | null> {
+    console.warn('[PostgresAdapter] updateSessionSetting not implemented');
+    return null;
+  }
+
+  async deleteSessionSetting(id: string): Promise<boolean> {
+    console.warn('[PostgresAdapter] deleteSessionSetting not implemented');
+    return false;
+  }
+
+  async bulkUpsertSessionSettings(sessionId: string, type: SettingType, settings: SessionSettingInput[]): Promise<SessionSetting[]> {
+    console.warn('[PostgresAdapter] bulkUpsertSessionSettings not implemented');
+    return [];
+  }
+
+  async getEffectiveSettings(sessionId: string, type?: SettingType): Promise<ProjectSetting[]> {
+    // For now, just return project settings without session override merging
+    const session = await this.getSession(sessionId);
+    if (!session) return [];
+    return this.getProjectSettings(session.projectId, type);
+  }
+
+  // ============================================
+  // Orphaned Sessions Operations (Stubs)
+  // ============================================
+
+  async getUnassignedSessions(): Promise<ProjectSession[]> {
+    console.warn('[PostgresAdapter] getUnassignedSessions not implemented');
+    return [];
+  }
+
+  async assignSessionToProject(sessionId: string, projectId: string): Promise<ProjectSession | null> {
+    const result = await this.reassignSession(sessionId, projectId);
+    return result.session;
   }
 }

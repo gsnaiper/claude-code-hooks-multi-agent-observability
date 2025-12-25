@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { Project, SettingType, ProjectSetting, PermissionsSettingValue } from '../types'
 import { useProjectSettings } from '../composables/useProjectSettings'
 import SettingsTabPanel from './settings/SettingsTabPanel.vue'

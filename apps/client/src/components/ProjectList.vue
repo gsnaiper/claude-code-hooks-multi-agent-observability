@@ -4,16 +4,27 @@
     <div class="flex-shrink-0 p-4 border-b border-[var(--theme-border-primary)]">
       <div class="flex items-center justify-between mb-3">
         <h2 class="text-[var(--theme-text-primary)] text-lg font-semibold">Projects</h2>
-        <button
-          @click="refresh"
-          class="p-2 rounded-lg bg-[var(--theme-bg-tertiary)] text-[var(--theme-text-secondary)] hover:text-[var(--theme-primary)] transition-colors"
-          :class="{ 'animate-spin': isLoading }"
-          title="Refresh projects"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-          </svg>
-        </button>
+        <div class="flex items-center gap-2">
+          <button
+            @click="showCreateModal = true"
+            class="px-3 py-1.5 text-sm bg-[var(--theme-primary)] text-white rounded-lg hover:bg-[var(--theme-primary-hover)] transition-colors flex items-center gap-1"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+            </svg>
+            New Project
+          </button>
+          <button
+            @click="refresh"
+            class="p-2 rounded-lg bg-[var(--theme-bg-tertiary)] text-[var(--theme-text-secondary)] hover:text-[var(--theme-primary)] transition-colors"
+            :class="{ 'animate-spin': isLoading }"
+            title="Refresh projects"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       <!-- Search & Filter -->
@@ -69,9 +80,14 @@
           v-for="project in filteredProjects"
           :key="project.id"
           :project="project"
-          @select="$emit('select', $event)"
         />
       </div>
+
+      <!-- Orphaned Sessions Panel -->
+      <OrphanedSessionsPanel
+        class="mt-4"
+        @assign="handleSessionAssigned"
+      />
     </div>
 
     <!-- Footer stats -->
@@ -81,23 +97,29 @@
         ({{ activeCount }} active)
       </span>
     </div>
+
+    <!-- Create Project Modal -->
+    <CreateProjectModal
+      :visible="showCreateModal"
+      @close="showCreateModal = false"
+      @created="handleProjectCreated"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import type { Project } from '../types'
+import type { Project, ProjectSession } from '../types'
 import { useProjects } from '../composables/useProjects'
 import ProjectCard from './ProjectCard.vue'
-
-defineEmits<{
-  select: [project: Project]
-}>()
+import CreateProjectModal from './CreateProjectModal.vue'
+import OrphanedSessionsPanel from './OrphanedSessionsPanel.vue'
 
 const { projects, isLoading, fetchProjects } = useProjects()
 
 const searchQuery = ref('')
 const statusFilter = ref<string>('')
+const showCreateModal = ref(false)
 
 const filteredProjects = computed(() => {
   let result = projects.value
@@ -127,6 +149,17 @@ async function refresh() {
     sortBy: 'lastActivity',
     sortOrder: 'desc'
   })
+}
+
+function handleProjectCreated(project: Project) {
+  // Project is already added to the list by the composable
+  console.log('Project created:', project.id)
+}
+
+function handleSessionAssigned(session: ProjectSession, project: Project) {
+  // Refresh to update counts
+  refresh()
+  console.log('Session assigned:', session.id, 'to', project.id)
 }
 
 onMounted(() => {

@@ -82,6 +82,7 @@
 
 <script setup lang="ts">
 import { ref, computed, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import type { Project } from '../types'
 import { useEventColors } from '../composables/useEventColors'
 
@@ -90,10 +91,10 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  select: [project: Project]
   rename: [projectId: string, newName: string]
 }>()
 
+const router = useRouter()
 const { getHexColorForApp } = useEventColors()
 
 // Inline editing state
@@ -101,10 +102,10 @@ const isEditing = ref(false)
 const editedName = ref('')
 const editInput = ref<HTMLInputElement | null>(null)
 
-// Handle card click - only select if not editing
+// Handle card click - navigate to project detail
 function handleClick() {
   if (!isEditing.value) {
-    emit('select', props.project)
+    router.push(`/projects/${props.project.id}`)
   }
 }
 

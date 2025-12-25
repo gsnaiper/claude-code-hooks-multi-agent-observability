@@ -454,19 +454,8 @@ const newKeyInput = ref('');
 const newKeyLabel = ref('');
 const isAddingKey = ref(false);
 
-// Computed for usage display
-const usagePercent = computed(() => {
-  if (!props.subscription) return 0;
-  return Math.round((props.subscription.characterCount / props.subscription.characterLimit) * 100);
-});
-
 const formatNumber = (n: number): string => {
   return n.toLocaleString();
-};
-
-const formatResetDate = (unix: number | null): string => {
-  if (!unix) return 'N/A';
-  return new Date(unix * 1000).toLocaleDateString();
 };
 
 const emit = defineEmits<{

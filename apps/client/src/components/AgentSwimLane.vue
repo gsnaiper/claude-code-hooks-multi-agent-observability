@@ -100,7 +100,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
-import type { HookEvent, TimeRange, ChartConfig } from '../types';
+import type { EventSummary, TimeRange, ChartConfig } from '../types';
 import { useAgentChartData } from '../composables/useAgentChartData';
 import { createChartRenderer, type ChartDimensions } from '../utils/chartRenderer';
 import { useEventEmojis } from '../composables/useEventEmojis';
@@ -108,7 +108,7 @@ import { useEventColors } from '../composables/useEventColors';
 
 const props = defineProps<{
   agentName: string; // Format: "app:session" (e.g., "claude-code:a1b2c3d4")
-  events: HookEvent[];
+  events: EventSummary[];
   timeRange: TimeRange;
 }>();
 
@@ -286,7 +286,7 @@ const handleResize = () => {
 
 const processNewEvents = () => {
   const currentEvents = props.events;
-  const newEventsToProcess: HookEvent[] = [];
+  const newEventsToProcess: EventSummary[] = [];
 
   // Find events that haven't been processed yet
   currentEvents.forEach(event => {

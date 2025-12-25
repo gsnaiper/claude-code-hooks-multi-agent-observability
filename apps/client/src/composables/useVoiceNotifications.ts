@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue';
-import type { HookEvent } from '../types';
+import type { EventSummary } from '../types';
 import { useAudioCache, type ApiKeyInfo, type ElevenLabsSubscription } from './useAudioCache';
 import { playNormalized, playNormalizedUrl, stopPlayback } from './useAudioNormalizer';
 
@@ -76,7 +76,7 @@ const MAX_HISTORY = 20;
 let notificationIdCounter = 0;
 
 // Notification queue to prevent parallel playback
-const notificationQueue: HookEvent[] = [];
+const notificationQueue: EventSummary[] = [];
 let isProcessingQueue = false;
 
 // Debounce tracking for template audio (avoid repeating same project)
@@ -416,7 +416,7 @@ function createVoiceNotifications() {
   };
 
   // Process a single notification event (internal)
-  const processEvent = async (event: HookEvent) => {
+  const processEvent = async (event: EventSummary) => {
     if (!settings.value.enabled) return;
 
     const eventType = event.hook_event_type;
@@ -483,8 +483,8 @@ function createVoiceNotifications() {
 
     // Git commit notification
     if (settings.value.notifyOnCommit && eventType === 'PostToolUse') {
-      const toolName = event.payload?.tool_name;
-      const command = event.payload?.tool_input?.command || '';
+      const toolName = event.tool_name;
+      const command = event.tool_command || '';
 
       if (toolName === 'Bash' && command.includes('git commit')) {
         const commitMsg = extractCommitMessage(command);
@@ -627,21 +627,20 @@ function createVoiceNotifications() {
     }
 
     // Error notification (local audio)
-    if (settings.value.notifyOnError) {
-      const payload = event.payload || {};
-      if (payload.error || payload.exit_code !== 0) {
-        await playLocalAudio(localAudio.error);
+    // Note: With EventSummary, we don't have access to payload.error or exit_code
+    // This would need server-side extraction to work properly
+    if (settings.value.notifyOnError && event.hook_event_type === 'Error') {
+      await playLocalAudio(localAudio.error);
 
-        // Add to history
-        addToHistory({
-          timestamp: Date.now(),
-          type: 'error',
-          sourceApp,
-          sessionId,
-          message: isRussianVoice() ? `${sourceApp}: Ошибка` : `${sourceApp}: Error`
-        });
-        return;
-      }
+      // Add to history
+      addToHistory({
+        timestamp: Date.now(),
+        type: 'error',
+        sourceApp,
+        sessionId,
+        message: isRussianVoice() ? `${sourceApp}: Ошибка` : `${sourceApp}: Error`
+      });
+      return;
     }
 
     // Summary notification - uses API for dynamic text
@@ -679,7 +678,7 @@ function createVoiceNotifications() {
   };
 
   // Public method to queue and process notifications
-  const notifyEvent = (event: HookEvent) => {
+  const notifyEvent = (event: EventSummary) => {
     notificationQueue.push(event);
     processQueue();
   };

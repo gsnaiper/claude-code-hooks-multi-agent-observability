@@ -94,14 +94,14 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
-import type { HookEvent, TimeRange, ChartConfig } from '../types';
+import type { EventSummary, TimeRange, ChartConfig } from '../types';
 import { useChartData } from '../composables/useChartData';
 import { createChartRenderer, type ChartDimensions } from '../utils/chartRenderer';
 import { useEventEmojis } from '../composables/useEventEmojis';
 import { useEventColors } from '../composables/useEventColors';
 
 const props = defineProps<{
-  events: HookEvent[];
+  events: EventSummary[];
   filters: {
     sourceApp: string;
     sessionId: string;
@@ -270,7 +270,7 @@ const handleResize = () => {
   render();
 };
 
-const isEventFiltered = (event: HookEvent): boolean => {
+const isEventFiltered = (event: EventSummary): boolean => {
   if (props.filters.sourceApp && event.source_app !== props.filters.sourceApp) {
     return false;
   }
@@ -285,7 +285,7 @@ const isEventFiltered = (event: HookEvent): boolean => {
 
 const processNewEvents = () => {
   const currentEvents = props.events;
-  const newEventsToProcess: HookEvent[] = [];
+  const newEventsToProcess: EventSummary[] = [];
   
   // Find events that haven't been processed yet
   currentEvents.forEach(event => {
