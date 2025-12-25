@@ -467,7 +467,7 @@ export class TerminalGateway {
   /**
    * Clean up a terminal session
    */
-  private cleanupSession(sessionId: string): void {
+  private async cleanupSession(sessionId: string): Promise<void> {
     const session = this.activeSessions.get(sessionId);
     if (!session) {
       return;
