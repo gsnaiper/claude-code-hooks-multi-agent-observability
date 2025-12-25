@@ -223,7 +223,7 @@ credentials/
 
 # Dependency directories
 vendor/
-packages/
+# packages/ # Removed to allow ccc-agent package
 
 # Output directories
 output/
