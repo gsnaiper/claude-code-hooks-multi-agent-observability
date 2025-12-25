@@ -156,6 +156,42 @@ CREATE INDEX IF NOT EXISTS idx_audio_cache_source_app ON audio_cache(source_app)
 CREATE INDEX IF NOT EXISTS idx_audio_cache_accessed_at ON audio_cache(accessed_at);
 
 -- ============================================
+-- SESSION LOCATIONS TABLE (Agent Connection Management)
+-- ============================================
+CREATE TABLE IF NOT EXISTS session_locations (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL UNIQUE,
+  project_id TEXT NOT NULL,
+  connection_type TEXT NOT NULL CHECK (connection_type IN ('local', 'ssh', 'docker', 'reverse')),
+
+  -- Outbound connection params (ssh/docker)
+  host TEXT,
+  port INTEGER,
+  username TEXT,
+  container_id TEXT,
+
+  -- Tmux params (all types)
+  tmux_session_name TEXT,
+  tmux_window_name TEXT,
+
+  -- Reverse connection params
+  agent_id TEXT,
+  agent_secret TEXT,
+
+  -- Status
+  status TEXT DEFAULT 'pending',
+  last_heartbeat_at TIMESTAMPTZ,
+  last_verified_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  FOREIGN KEY (session_id) REFERENCES project_sessions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_locations_agent ON session_locations(agent_id);
+CREATE INDEX IF NOT EXISTS idx_session_locations_status ON session_locations(status);
+
+-- ============================================
 -- HELPER FUNCTIONS
 -- ============================================
 

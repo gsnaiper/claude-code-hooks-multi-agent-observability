@@ -55,6 +55,7 @@ import {
   getUnassignedSessions,
   assignSessionToProject
 } from './db';
+import { handleTerminalWebSocket } from './terminal/gateway';
 import type { HookEvent, HumanInTheLoopResponse, Project, ProjectSearchQuery, SettingType, ProjectSettingInput, RepositoryInput, SessionSettingInput, EventFilters, TimeRange } from './types';
 import { toEventSummary } from './types';
 import {
@@ -220,6 +221,7 @@ async function sendResponseToAgent(
 
 // Create Bun server with HTTP and WebSocket support
 const server = Bun.serve({
+  hostname: '0.0.0.0', // Allow external connections (Traefik)
   port: parseInt(process.env.SERVER_PORT || '4000'),
   
   async fetch(req: Request) {
@@ -1059,6 +1061,109 @@ const server = Bun.serve({
       });
     }
 
+    // ============= TMUX INTEGRATION API =============
+
+    // GET /api/sessions/:id/tmux - Get tmux availability for a session
+    if (url.pathname.match(/^\/api\/sessions\/[^\/]+\/tmux$/) && req.method === 'GET') {
+      const pathParts = url.pathname.split('/');
+      const sessionId = pathParts[3] ? decodeURIComponent(pathParts[3]) : '';
+
+      if (!sessionId) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Session ID is required'
+        }), {
+          status: 400,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+
+      try {
+        const { findTmuxWindow, buildTtydUrl } = await import('./tmux');
+        const result = await findTmuxWindow(sessionId);
+
+        if (result.found && result.info) {
+          const ttydUrl = buildTtydUrl(result.info.target);
+          return new Response(JSON.stringify({
+            success: true,
+            data: {
+              available: true,
+              tmuxInfo: result.info,
+              ttydUrl,
+              lastChecked: Date.now()
+            }
+          }), {
+            headers: { ...headers, 'Content-Type': 'application/json' }
+          });
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: {
+            available: false,
+            error: result.error,
+            lastChecked: Date.now()
+          }
+        }), {
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('[API] Tmux query error:', error);
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Failed to query tmux status'
+        }), {
+          status: 500,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // GET /api/tmux/sessions - List all active CCC sessions in tmux
+    if (url.pathname === '/api/tmux/sessions' && req.method === 'GET') {
+      try {
+        const { getTmuxSessionMapping, buildTtydUrl } = await import('./tmux');
+        const mapping = await getTmuxSessionMapping();
+        const sessions = [];
+
+        for (const [sessionId, tmuxInfo] of mapping.entries()) {
+          // Get project info from database if available
+          const session = await getSession(sessionId);
+          const project = session ? await getProject(session.projectId) : null;
+
+          sessions.push({
+            sessionId,
+            tmuxInfo,
+            ttydUrl: buildTtydUrl(tmuxInfo.target),
+            projectId: session?.projectId,
+            projectName: project?.displayName || project?.id,
+            session: session ? {
+              startedAt: session.startedAt,
+              modelName: session.modelName,
+              cwd: session.cwd
+            } : null
+          });
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          data: sessions,
+          count: sessions.length
+        }), {
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('[API] Tmux listing error:', error);
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Failed to list tmux sessions'
+        }), {
+          status: 500,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
     // ============= PROJECT SETTINGS API =============
 
     // GET /api/projects/:id/settings - Get all settings for a project
@@ -1738,6 +1843,26 @@ const server = Bun.serve({
       }
     }
 
+    // Terminal gateway WebSocket upgrade - web clients
+    if (url.pathname === '/terminal') {
+      const success = server.upgrade(req, {
+        data: { path: '/terminal' }
+      });
+      if (success) {
+        return undefined;
+      }
+    }
+
+    // Terminal gateway WebSocket upgrade - remote agents
+    if (url.pathname === '/agent') {
+      const success = server.upgrade(req, {
+        data: { path: '/agent' }
+      });
+      if (success) {
+        return undefined;
+      }
+    }
+
     // Default response
     return new Response('Multi-Agent Observability Server', {
       headers: { ...headers, 'Content-Type': 'text/plain' }
@@ -1746,6 +1871,16 @@ const server = Bun.serve({
   
   websocket: {
     async open(ws) {
+      const path = (ws.data as any)?.path;
+
+      // Route to terminal gateway for /terminal and /agent paths
+      if (path === '/terminal' || path === '/agent') {
+        console.log(`Terminal gateway WebSocket connected: ${path}`);
+        handleTerminalWebSocket(ws as any, path);
+        return;
+      }
+
+      // Default event stream handler for /stream
       console.log('WebSocket client connected');
       wsClients.add(ws);
 
@@ -1753,18 +1888,41 @@ const server = Bun.serve({
       const summaries = await getEventSummaries({ limit: 300 });
       ws.send(JSON.stringify({ type: 'initial', data: summaries }));
     },
-    
+
     message(ws, message) {
+      const path = (ws.data as any)?.path;
+
+      // Terminal gateway messages are handled by the gateway itself
+      if (path === '/terminal' || path === '/agent') {
+        return;
+      }
+
       // Handle any client messages if needed
       console.log('Received message:', message);
     },
-    
+
     close(ws) {
+      const path = (ws.data as any)?.path;
+
+      // Terminal gateway cleanup is handled by the gateway itself
+      if (path === '/terminal' || path === '/agent') {
+        console.log(`Terminal gateway WebSocket disconnected: ${path}`);
+        return;
+      }
+
       console.log('WebSocket client disconnected');
       wsClients.delete(ws);
     },
-    
+
     error(ws, error) {
+      const path = (ws.data as any)?.path;
+
+      // Terminal gateway errors are handled by the gateway itself
+      if (path === '/terminal' || path === '/agent') {
+        console.error(`Terminal gateway WebSocket error on ${path}:`, error);
+        return;
+      }
+
       console.error('WebSocket error:', error);
       wsClients.delete(ws);
     }
@@ -1773,4 +1931,6 @@ const server = Bun.serve({
 
 console.log(`🚀 Server running on http://localhost:${server.port}`);
 console.log(`📊 WebSocket endpoint: ws://localhost:${server.port}/stream`);
+console.log(`🖥️  Terminal gateway (web): ws://localhost:${server.port}/terminal`);
+console.log(`🤖 Terminal gateway (agent): ws://localhost:${server.port}/agent`);
 console.log(`📮 POST events to: http://localhost:${server.port}/events`);
