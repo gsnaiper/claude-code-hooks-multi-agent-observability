@@ -89,10 +89,18 @@ export class Agent {
     this.ws.on('open', () => {
       console.log('[Agent] Connected to gateway');
 
-      // Register all active sessions
-      for (const session of this.watcher.getSessions()) {
-        this.registerSession(session);
-      }
+      // Register agent with gateway
+      const activeSessions = this.watcher.getSessions();
+      this.send({
+        type: 'agent:register',
+        agent_id: this.config.agentId,
+        agent_secret: this.config.agentSecret,
+        sessions: activeSessions.map(s => ({
+          session_id: s.sessionId,
+          tmux_session_name: s.sessionId,
+          metadata: s.metadata,
+        })),
+      });
     });
 
     this.ws.on('message', (data: WebSocket.Data) => {
@@ -121,23 +129,41 @@ export class Agent {
   }
 
   private handleMessage(message: any): void {
-    const { type, sessionId } = message;
+    const { type } = message;
+    // Gateway uses session_id (snake_case) in protocol
+    const sessionId = message.session_id || message.sessionId;
 
     switch (type) {
-      case 'connect':
+      case 'agent:command:connect':
         this.connectSession(sessionId, message.rows, message.cols);
         break;
 
-      case 'input':
+      case 'agent:command:input':
         this.sendInput(sessionId, message.data);
         break;
 
-      case 'resize':
+      case 'agent:command:resize':
         this.resizeSession(sessionId, message.rows, message.cols);
         break;
 
-      case 'disconnect':
+      case 'agent:command:disconnect':
         this.disconnectSession(sessionId);
+        break;
+
+      case 'agent:command:ping':
+        this.send({ type: 'agent:heartbeat', agent_id: this.config.agentId });
+        break;
+
+      case 'agent:registered':
+        console.log(`[Agent] Registration confirmed: ${message.message || 'OK'}`);
+        break;
+
+      case 'agent:pong':
+        // Heartbeat response received
+        break;
+
+      case 'gateway:error':
+        console.error(`[Agent] Gateway error: ${message.error}`, message.details);
         break;
 
       default:
@@ -152,8 +178,9 @@ export class Agent {
     }
 
     this.send({
-      type: 'register',
-      sessionId: session.sessionId,
+      type: 'agent:session:start',
+      session_id: session.sessionId,
+      tmux_session_name: session.sessionId,
       metadata: session.metadata,
     });
   }
@@ -165,8 +192,8 @@ export class Agent {
     // Notify gateway
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.send({
-        type: 'unregister',
-        sessionId,
+        type: 'agent:session:end',
+        session_id: sessionId,
       });
     }
   }
@@ -198,8 +225,8 @@ export class Agent {
     // Forward stdout to gateway
     proc.stdout.on('data', (data: Buffer) => {
       this.send({
-        type: 'output',
-        sessionId,
+        type: 'agent:session:output',
+        session_id: sessionId,
         data: data.toString('base64'),
       });
     });
@@ -207,6 +234,12 @@ export class Agent {
     // Forward stderr to gateway (if needed)
     proc.stderr.on('data', (data: Buffer) => {
       console.error(`[Agent] Session ${sessionId} stderr:`, data.toString());
+      // Send errors to gateway as well
+      this.send({
+        type: 'agent:session:error',
+        session_id: sessionId,
+        error: data.toString(),
+      });
     });
 
     // Handle process exit
@@ -215,8 +248,9 @@ export class Agent {
       this.sessions.delete(sessionId);
 
       this.send({
-        type: 'disconnected',
-        sessionId,
+        type: 'agent:session:end',
+        session_id: sessionId,
+        reason: `Process exited with code ${code}`,
       });
     });
 

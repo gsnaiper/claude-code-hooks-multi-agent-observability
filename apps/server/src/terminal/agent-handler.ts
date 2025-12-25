@@ -27,6 +27,11 @@ import type {
   TerminalOutputMessage,
 } from './types';
 import { agentRegistry } from './agent-registry';
+import {
+  getSessionLocation,
+  createSessionLocation,
+  updateSessionLocation,
+} from './location-registry';
 
 // ============================================================================
 // Agent Handler Class
@@ -42,6 +47,41 @@ class AgentHandler {
   constructor() {
     this.agentToWebSocket = new Map();
     this.webSocketToAgent = new Map();
+  }
+
+  /**
+   * Validate agent credentials against configured secrets
+   * Supports:
+   * - AGENT_SECRETS: comma-separated list of valid secrets (any agent can use)
+   * - AGENT_SECRET_<AGENT_ID>: per-agent secret (normalized: - and . become _)
+   * - No secrets configured: allow all (development mode with warning)
+   */
+  private validateAgentCredentials(
+    agentId: string,
+    agentSecret?: string
+  ): boolean {
+    // Check per-agent secret first (AGENT_SECRET_my_agent_id)
+    const normalizedAgentId = agentId.replace(/[-\.]/g, '_').toUpperCase();
+    const perAgentSecret = process.env[`AGENT_SECRET_${normalizedAgentId}`];
+
+    if (perAgentSecret) {
+      return agentSecret === perAgentSecret;
+    }
+
+    // Check global secrets list
+    const globalSecrets = process.env.AGENT_SECRETS;
+    if (globalSecrets) {
+      const validSecrets = globalSecrets.split(',').map((s) => s.trim());
+      return agentSecret !== undefined && validSecrets.includes(agentSecret);
+    }
+
+    // No secrets configured - development mode
+    // Allow all but log warning
+    console.warn(
+      `[AgentHandler] No AGENT_SECRETS or AGENT_SECRET_${normalizedAgentId} configured. ` +
+        'Allowing all agents in development mode.'
+    );
+    return true;
   }
 
   // ==========================================================================
@@ -67,18 +107,18 @@ class AgentHandler {
           break;
 
         case 'agent:session:start':
-          this.handleSessionStart(agentId, message);
+          await this.handleSessionStart(agentId, message);
           break;
 
         case 'agent:session:end':
-          this.handleSessionEnd(agentId, message);
+          await this.handleSessionEnd(agentId, message);
           break;
 
-        case 'agent:output':
+        case 'agent:session:output':
           this.handleOutput(agentId, message);
           break;
 
-        case 'agent:error':
+        case 'agent:session:error':
           this.handleError(agentId, message);
           break;
 
@@ -123,11 +163,16 @@ class AgentHandler {
       `[AgentHandler] Agent registration request: ${agent_id} from ${hostname || 'unknown'}`
     );
 
-    // TODO: Validate agent_secret against database
-    // For now, accept all registrations
-    const isValid = true;
+    // Validate agent credentials
+    // Uses AGENT_SECRETS env var (comma-separated list of valid secrets)
+    // or AGENT_SECRET_<AGENT_ID> for per-agent secrets
+    // If no secrets configured, allow all (development mode)
+    const isValid = this.validateAgentCredentials(agent_id, agent_secret);
 
     if (!isValid) {
+      console.warn(
+        `[AgentHandler] Agent ${agent_id} failed authentication`
+      );
       const errorMsg: GatewayErrorMessage = {
         type: 'gateway:error',
         error: 'Invalid agent credentials',
@@ -191,10 +236,10 @@ class AgentHandler {
   /**
    * Handle session start notification from agent
    */
-  private handleSessionStart(
+  private async handleSessionStart(
     agentId: string,
     message: AgentSessionStartMessage
-  ): void {
+  ): Promise<void> {
     const { session_id, project_id, tmux_session_name, tmux_window_name } =
       message;
 
@@ -209,16 +254,46 @@ class AgentHandler {
       `[AgentHandler] Session started on agent ${agentId}: ${session_id} (tmux: ${tmuxTarget})`
     );
 
-    // TODO: Update database with session location information
+    // Update database with session location information
+    try {
+      const existingLocation = await getSessionLocation(session_id);
+      if (existingLocation) {
+        // Update existing location
+        await updateSessionLocation(session_id, {
+          connection_type: 'reverse',
+          reverse_agent_id: agentId,
+          tmux_session_name: tmux_session_name || session_id,
+          tmux_window_name,
+          status: 'active',
+          last_verified_at: new Date(),
+        });
+      } else {
+        // Create new location entry
+        await createSessionLocation({
+          session_id,
+          project_id: project_id || 'unknown',
+          connection_type: 'reverse',
+          reverse_agent_id: agentId,
+          tmux_session_name: tmux_session_name || session_id,
+          tmux_window_name,
+          status: 'active',
+        });
+      }
+    } catch (error) {
+      console.error(
+        `[AgentHandler] Error updating session location for ${session_id}:`,
+        error
+      );
+    }
   }
 
   /**
    * Handle session end notification from agent
    */
-  private handleSessionEnd(
+  private async handleSessionEnd(
     agentId: string,
     message: AgentSessionEndMessage
-  ): void {
+  ): Promise<void> {
     const { session_id, reason } = message;
 
     agentRegistry.unregisterSession(agentId, session_id);
@@ -227,7 +302,18 @@ class AgentHandler {
       `[AgentHandler] Session ended on agent ${agentId}: ${session_id}${reason ? ` (${reason})` : ''}`
     );
 
-    // TODO: Update database session status
+    // Update database session status
+    try {
+      await updateSessionLocation(session_id, {
+        status: 'inactive',
+        last_verified_at: new Date(),
+      });
+    } catch (error) {
+      console.error(
+        `[AgentHandler] Error updating session status for ${session_id}:`,
+        error
+      );
+    }
   }
 
   /**

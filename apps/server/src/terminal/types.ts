@@ -215,7 +215,7 @@ export interface AgentSessionEndMessage extends BaseMessage {
  * Agent sends terminal output to gateway
  */
 export interface AgentOutputMessage extends BaseMessage {
-  type: 'agent:output';
+  type: 'agent:session:output';
   session_id: string;
   data: string;
 }
@@ -224,7 +224,7 @@ export interface AgentOutputMessage extends BaseMessage {
  * Agent sends error information to gateway
  */
 export interface AgentErrorMessage extends BaseMessage {
-  type: 'agent:error';
+  type: 'agent:session:error';
   session_id?: string;
   error: string;
   details?: any;
