@@ -492,7 +492,8 @@ async function openTerminal(session: ProjectSession) {
   // Check if session is available in tmux
   let tmuxData = sessionTmuxInfo.value.get(session.id)
   if (!tmuxData) {
-    tmuxData = await checkTmuxAvailability(session.id)
+    const result = await checkTmuxAvailability(session.id)
+    if (result) tmuxData = result
   }
 
   if (tmuxData && tmuxData.available && tmuxData.ttydUrl) {

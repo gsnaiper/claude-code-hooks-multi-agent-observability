@@ -263,7 +263,18 @@ const server = Bun.serve({
     if (req.method === 'OPTIONS') {
       return new Response(null, { headers });
     }
-    
+
+    // GET /health - Health check endpoint
+    if (url.pathname === '/health' && req.method === 'GET') {
+      return new Response(JSON.stringify({
+        status: 'ok',
+        timestamp: Date.now(),
+        uptime: process.uptime()
+      }), {
+        headers: { ...headers, 'Content-Type': 'application/json' }
+      });
+    }
+
     // POST /events - Receive new events
     if (url.pathname === '/events' && req.method === 'POST') {
       try {

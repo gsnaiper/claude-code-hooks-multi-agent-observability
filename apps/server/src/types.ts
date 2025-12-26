@@ -60,6 +60,7 @@ export interface EventSummary {
   tool_name?: string;
   tool_command?: string;
   tool_file_path?: string;
+  tool_description?: string;
   // HITL flags (lightweight):
   has_hitl: boolean;
   hitl_type?: string;
@@ -84,6 +85,7 @@ export function toEventSummary(event: HookEvent): EventSummary {
     tool_name: event.payload?.tool_name,
     tool_command: event.payload?.tool_input?.command,
     tool_file_path: event.payload?.tool_input?.file_path,
+    tool_description: event.payload?.tool_input?.description,
     // HITL
     has_hitl: !!event.humanInTheLoop,
     hitl_type: event.humanInTheLoop?.type,

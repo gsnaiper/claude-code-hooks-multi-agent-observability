@@ -142,7 +142,7 @@ onMounted(() => {
       foreground: '#d4d4d4',
       cursor: '#d4d4d4',
       cursorAccent: '#1e1e1e',
-      selection: 'rgba(255, 255, 255, 0.3)',
+      selectionBackground: 'rgba(255, 255, 255, 0.3)',
       black: '#000000',
       red: '#cd3131',
       green: '#0dbc79',

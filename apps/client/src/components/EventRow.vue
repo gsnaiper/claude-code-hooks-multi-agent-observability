@@ -407,9 +407,10 @@
 
       <!-- Tool info and Summary - Desktop Layout -->
       <div class="flex items-center justify-between mb-2 mobile:hidden">
-        <div v-if="toolInfo" class="text-base text-[var(--theme-text-secondary)] font-semibold">
+        <div v-if="toolInfo" class="text-base text-[var(--theme-text-secondary)] font-semibold flex flex-wrap items-baseline gap-2">
           <span class="font-medium italic px-2 py-0.5 rounded border-2 border-[var(--theme-primary)] bg-[var(--theme-primary-light)] shadow-sm">{{ toolInfo.tool }}</span>
-          <span v-if="toolInfo.detail" class="ml-2 text-[var(--theme-text-tertiary)]" :class="{ 'italic': event.hook_event_type === 'UserPromptSubmit' }">{{ toolInfo.detail }}</span>
+          <span v-if="toolInfo.detail" class="text-[var(--theme-text-tertiary)] font-mono text-sm break-all" :class="{ 'italic': event.hook_event_type === 'UserPromptSubmit' }">{{ toolInfo.detail }}</span>
+          <span v-if="toolInfo.description" class="text-[var(--theme-text-quaternary)] text-sm italic">— {{ toolInfo.description }}</span>
         </div>
         
         <!-- Summary aligned to the right -->
@@ -423,9 +424,10 @@
 
       <!-- Tool info and Summary - Mobile Layout -->
       <div class="space-y-2 hidden mobile:block mb-2">
-        <div v-if="toolInfo" class="text-sm text-[var(--theme-text-secondary)] font-semibold w-full">
+        <div v-if="toolInfo" class="text-sm text-[var(--theme-text-secondary)] font-semibold w-full flex flex-wrap items-baseline gap-1.5">
           <span class="font-medium italic px-1.5 py-0.5 rounded border-2 border-[var(--theme-primary)] bg-[var(--theme-primary-light)] shadow-sm">{{ toolInfo.tool }}</span>
-          <span v-if="toolInfo.detail" class="ml-2 text-[var(--theme-text-tertiary)]" :class="{ 'italic': event.hook_event_type === 'UserPromptSubmit' }">{{ toolInfo.detail }}</span>
+          <span v-if="toolInfo.detail" class="text-[var(--theme-text-tertiary)] font-mono text-xs break-all" :class="{ 'italic': event.hook_event_type === 'UserPromptSubmit' }">{{ toolInfo.detail }}</span>
+          <span v-if="toolInfo.description" class="text-[var(--theme-text-quaternary)] text-xs italic">— {{ toolInfo.description }}</span>
         </div>
         
         <div v-if="event.summary" class="w-full px-2 py-1 bg-[var(--theme-primary)]/10 border border-[var(--theme-primary)]/30 rounded-lg shadow-md">
@@ -655,12 +657,17 @@ const toolInfo = computed(() => {
 
   // Handle tool-based events using extracted fields
   if (tool_name) {
-    const info: { tool: string; detail?: string } = { tool: tool_name };
+    const info: { tool: string; detail?: string; description?: string } = { tool: tool_name };
 
     if (tool_command) {
-      info.detail = tool_command.slice(0, 50) + (tool_command.length > 50 ? '...' : '');
+      info.detail = tool_command; // Full command without truncation
     } else if (tool_file_path) {
       info.detail = tool_file_path.split('/').pop();
+    }
+
+    // Add description from tool_input if available
+    if (props.event.tool_description) {
+      info.description = props.event.tool_description;
     }
 
     return info;

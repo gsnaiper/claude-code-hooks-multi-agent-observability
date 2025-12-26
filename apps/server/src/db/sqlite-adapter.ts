@@ -507,6 +507,7 @@ export class SqliteAdapter implements DatabaseAdapter {
         json_extract(payload, '$.tool_name') as tool_name,
         json_extract(payload, '$.tool_input.command') as tool_command,
         json_extract(payload, '$.tool_input.file_path') as tool_file_path,
+        json_extract(payload, '$.tool_input.description') as tool_description,
         CASE WHEN humanInTheLoop IS NOT NULL THEN 1 ELSE 0 END as has_hitl,
         json_extract(humanInTheLoop, '$.type') as hitl_type,
         CASE WHEN humanInTheLoopStatus IS NOT NULL THEN 'responded' ELSE 'pending' END as hitl_status
@@ -532,6 +533,7 @@ export class SqliteAdapter implements DatabaseAdapter {
       tool_name: row.tool_name || undefined,
       tool_command: row.tool_command || undefined,
       tool_file_path: row.tool_file_path || undefined,
+      tool_description: row.tool_description || undefined,
       has_hitl: row.has_hitl === 1,
       hitl_type: row.hitl_type || undefined,
       hitl_status: row.has_hitl === 1 ? (row.hitl_status as 'pending' | 'responded') : undefined

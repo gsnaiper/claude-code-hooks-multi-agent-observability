@@ -70,6 +70,7 @@ export interface EventSummary {
   tool_name?: string;
   tool_command?: string;
   tool_file_path?: string;
+  tool_description?: string;
   // HITL flags:
   has_hitl: boolean;
   hitl_type?: string;
