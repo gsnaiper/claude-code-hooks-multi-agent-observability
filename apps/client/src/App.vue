@@ -66,7 +66,6 @@
 
           <!-- Voice Notifications Toggle -->
           <button
-            v-if="voiceConfigured"
             @click="isSpeaking ? stopVoice() : showVoiceSettings = true"
             class="p-3 mobile:p-1 rounded-lg transition-all duration-200 border backdrop-blur-sm shadow-lg hover:shadow-xl"
             :class="voiceSettings.enabled
