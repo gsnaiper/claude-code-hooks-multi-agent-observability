@@ -6,6 +6,9 @@ services:
     build:
       context: ./apps/client
       dockerfile: Dockerfile
+      args:
+        - VITE_ELEVENLABS_API_KEY=${VITE_ELEVENLABS_API_KEY:-}
+        - VITE_ELEVENLABS_VOICE_ID=${VITE_ELEVENLABS_VOICE_ID:-21m00Tcm4TlvDq8ikWAM}
     container_name: claude-hooks-gateway
     ports:
       - "${GATEWAY_PORT:-5173}:80"
