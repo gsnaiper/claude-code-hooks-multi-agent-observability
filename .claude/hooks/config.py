@@ -55,6 +55,35 @@ HITL_CONFIG = {
 }
 
 
+# Hints Configuration
+HINTS_CONFIG = {
+    # Master switch for hints system
+    'enabled': True,
+
+    # Auto-fix: automatically substitute commands based on project context
+    # When False, only provides hints without modifying commands
+    'auto_fix': False,
+
+    # Tools that should receive hints
+    'hinted_tools': [
+        'Bash',      # Command hints (npm -> bun, etc.)
+        'Read',      # File access hints
+        'Edit',      # Edit hints
+        'Write',     # Write hints
+        'Glob',      # Search hints
+    ],
+
+    # Specific hint categories to enable
+    'categories': {
+        'runtime_substitution': True,   # npm -> bun, pip -> uv, etc.
+        'package_manager': True,        # Suggest correct package manager
+        'framework_specific': True,     # Vue/React specific hints
+        'script_availability': True,    # Hint about available scripts
+        'file_patterns': True,          # Suggest file patterns for frameworks
+    },
+}
+
+
 def is_hitl_enabled() -> bool:
     """Check if HITL is enabled globally."""
     return HITL_CONFIG.get('enabled', True)
@@ -134,3 +163,32 @@ def should_require_hitl(tool_name: str, tool_input: dict) -> bool:
             return True
 
     return False
+
+
+# ============================================
+# Hints System Functions
+# ============================================
+
+def is_hints_enabled() -> bool:
+    """Check if hints system is enabled globally."""
+    return HINTS_CONFIG.get('enabled', True)
+
+
+def is_auto_fix_enabled() -> bool:
+    """Check if auto-fix (command substitution) is enabled."""
+    return HINTS_CONFIG.get('auto_fix', False)
+
+
+def should_provide_hints(tool_name: str) -> bool:
+    """Check if hints should be provided for this tool."""
+    if not is_hints_enabled():
+        return False
+    return tool_name in HINTS_CONFIG.get('hinted_tools', [])
+
+
+def is_hint_category_enabled(category: str) -> bool:
+    """Check if specific hint category is enabled."""
+    if not is_hints_enabled():
+        return False
+    categories = HINTS_CONFIG.get('categories', {})
+    return categories.get(category, True)

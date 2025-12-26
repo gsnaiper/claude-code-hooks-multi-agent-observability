@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import type { Repository, RepositoryInput, ApiResponse } from '../types'
+import { API_BASE_URL } from '../config'
 
 // Reactive state
 const repositories = ref<Repository[]>([])
@@ -7,7 +8,7 @@ const isLoading = ref(false)
 const error = ref<string | null>(null)
 
 // API base URL
-const API_BASE = 'http://localhost:4000/api'
+const API_BASE = `${API_BASE_URL}/api`
 
 export function useRepositories() {
   // Computed: get primary repository

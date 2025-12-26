@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import type { ProjectSession, ApiResponse } from '../types'
+import { API_BASE_URL } from '../config'
 
 // Reactive state
 const unassignedSessions = ref<ProjectSession[]>([])
@@ -7,7 +8,7 @@ const isLoading = ref(false)
 const error = ref<string | null>(null)
 
 // API base URL
-const API_BASE = 'http://localhost:4000/api'
+const API_BASE = `${API_BASE_URL}/api`
 
 export function useOrphanedSessions() {
   // Computed: count of unassigned sessions

@@ -1,25 +1,36 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.8"
-# dependencies = ["requests", "websockets"]
+# dependencies = ["requests", "websockets", "python-dotenv"]
 # ///
+
+import os
+from pathlib import Path
+
+# Load .env BEFORE any other imports that might use env vars
+from dotenv import load_dotenv
+_env_path = Path.home() / '.claude' / '.env'
+if _env_path.exists():
+    load_dotenv(_env_path)
 
 import json
 import sys
 import re
-import os
 import shlex
 import fcntl
-from pathlib import Path
 from utils.constants import ensure_session_log_dir
 from utils.hitl import ask_approval, ask_question_via_hitl
+from utils.hints import process_tool_call, create_hook_output
 from config import (
     is_hitl_enabled,
     is_decision_tool,
     is_protected_file,
     get_timeout,
     get_hitl_type,
-    should_require_hitl
+    should_require_hitl,
+    is_hints_enabled,
+    is_auto_fix_enabled,
+    should_provide_hints
 )
 
 # Allowed directories where rm -rf is permitted
@@ -209,16 +220,40 @@ def main():
                 )
 
                 if result.answered and result.response:
-                    # User answered - allow tool with response info
-                    print(f"User response received: {result.response[:50]}...", file=sys.stderr)
-                    # Note: The actual response handling depends on how Claude expects the answer
-                    sys.exit(0)
+                    # User answered via external UI - block native tool and return answer
+                    # Using JSON output with permissionDecision to pass user's response to Claude
+                    hook_output = {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": f"User already answered via external interface. User's response: \"{result.response}\""
+                        }
+                    }
+                    print(json.dumps(hook_output))  # JSON to stdout for Claude
+                    print(f"[HITL] User response received via external UI", file=sys.stderr)
+                    sys.exit(0)  # Exit 0 so JSON is processed
                 elif result.cancelled:
-                    print("BLOCKED: User cancelled the question", file=sys.stderr)
-                    sys.exit(2)
+                    hook_output = {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "User cancelled the question via external interface"
+                        }
+                    }
+                    print(json.dumps(hook_output))
+                    print("[HITL] User cancelled the question", file=sys.stderr)
+                    sys.exit(0)
                 else:
-                    print("BLOCKED: No response received (timeout)", file=sys.stderr)
-                    sys.exit(2)
+                    hook_output = {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "No response received (timeout). Please try asking the question again."
+                        }
+                    }
+                    print(json.dumps(hook_output))
+                    print("[HITL] Timeout - no response received", file=sys.stderr)
+                    sys.exit(0)
 
             # ExitPlanMode - approve plan execution
             elif tool_name == 'ExitPlanMode':
@@ -236,12 +271,20 @@ def main():
 
                 if result.approved:
                     comment = f" Comment: {result.comment}" if result.comment else ""
-                    print(f"APPROVED: Plan execution approved.{comment}", file=sys.stderr)
-                    sys.exit(0)
+                    print(f"[HITL] Plan execution approved.{comment}", file=sys.stderr)
+                    sys.exit(0)  # Allow - proceed with ExitPlanMode
                 else:
                     reason = result.comment or "User denied plan execution"
-                    print(f"BLOCKED: {reason}", file=sys.stderr)
-                    sys.exit(2)
+                    hook_output = {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": f"Plan execution denied via HITL: {reason}"
+                        }
+                    }
+                    print(json.dumps(hook_output))
+                    print(f"[HITL] Plan execution denied: {reason}", file=sys.stderr)
+                    sys.exit(0)
 
             # EnterPlanMode - approve entering plan mode
             elif tool_name == 'EnterPlanMode':
@@ -259,12 +302,20 @@ def main():
 
                 if result.approved:
                     comment = f" Comment: {result.comment}" if result.comment else ""
-                    print(f"APPROVED: Entering plan mode.{comment}", file=sys.stderr)
-                    sys.exit(0)
+                    print(f"[HITL] Entering plan mode approved.{comment}", file=sys.stderr)
+                    sys.exit(0)  # Allow - proceed with EnterPlanMode
                 else:
                     reason = result.comment or "User denied entering plan mode"
-                    print(f"BLOCKED: {reason}", file=sys.stderr)
-                    sys.exit(2)
+                    hook_output = {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": f"Entering plan mode denied via HITL: {reason}"
+                        }
+                    }
+                    print(json.dumps(hook_output))
+                    print(f"[HITL] Entering plan mode denied: {reason}", file=sys.stderr)
+                    sys.exit(0)
 
         # ===========================================
         # PROTECTED FILE EDITS
@@ -299,12 +350,20 @@ def main():
 
                 if result.approved:
                     comment = f" Comment: {result.comment}" if result.comment else ""
-                    print(f"APPROVED: File edit approved.{comment}", file=sys.stderr)
-                    # Continue to logging, don't exit
+                    print(f"[HITL] File edit approved.{comment}", file=sys.stderr)
+                    # Continue to logging, don't exit - file edit proceeds
                 else:
                     reason = result.comment or "User denied file edit"
-                    print(f"BLOCKED: {reason}", file=sys.stderr)
-                    sys.exit(2)
+                    hook_output = {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": f"Protected file edit denied via HITL: {reason}. File: {file_path}"
+                        }
+                    }
+                    print(json.dumps(hook_output))
+                    print(f"[HITL] File edit denied: {reason}", file=sys.stderr)
+                    sys.exit(0)
 
         # Check for .env file access (blocks access to sensitive environment files)
         # COMMENTED OUT: Allows worktree command to create .env files automatically
@@ -334,22 +393,61 @@ def main():
                     )
 
                     if result.approved:
-                        if result.comment:
-                            print(f"APPROVED with comment: {result.comment}", file=sys.stderr)
-                        else:
-                            print("APPROVED: Proceeding with command", file=sys.stderr)
+                        comment = f" Comment: {result.comment}" if result.comment else ""
+                        print(f"[HITL] Dangerous command approved.{comment}", file=sys.stderr)
                         # Continue execution (don't exit, will proceed to logging)
                     else:
-                        reason = result.comment or "No reason provided"
-                        print(f"DENIED: {reason}", file=sys.stderr)
-                        print(f"Command blocked: {command}", file=sys.stderr)
-                        sys.exit(2)  # Exit code 2 blocks tool call
+                        reason = result.comment or "User denied dangerous command"
+                        hook_output = {
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "deny",
+                                "permissionDecisionReason": f"Dangerous command denied via HITL: {reason}. Command: {command}"
+                            }
+                        }
+                        print(json.dumps(hook_output))
+                        print(f"[HITL] Dangerous command denied: {reason}", file=sys.stderr)
+                        sys.exit(0)
                 else:
-                    # HITL disabled - use legacy blocking behavior
-                    print("BLOCKED: Dangerous rm command detected and prevented", file=sys.stderr)
-                    print(f"Tip: rm -rf is only allowed in these directories: {', '.join(ALLOWED_RM_DIRECTORIES)}", file=sys.stderr)
-                    sys.exit(2)  # Exit code 2 blocks tool call and shows error to Claude
-        
+                    # HITL disabled - use JSON format for blocking
+                    hook_output = {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": f"Dangerous rm command blocked. Only allowed in: {', '.join(ALLOWED_RM_DIRECTORIES)}. Command: {command}"
+                        }
+                    }
+                    print(json.dumps(hook_output))
+                    print("[HITL] Dangerous rm command blocked (HITL disabled)", file=sys.stderr)
+                    sys.exit(0)
+
+        # ===========================================
+        # HINTS AND AUTO-FIX SYSTEM
+        # ===========================================
+        if is_hints_enabled() and should_provide_hints(tool_name):
+            # Get working directory from input or use current
+            cwd = input_data.get('cwd', os.getcwd())
+
+            # Process tool call for hints/modifications
+            hint_result = process_tool_call(
+                tool_name,
+                tool_input,
+                cwd=cwd,
+                auto_fix=is_auto_fix_enabled()
+            )
+
+            # If we have hints or modifications, output them
+            if hint_result.hint or hint_result.should_modify:
+                hook_output = create_hook_output(hint_result, tool_input)
+                if hook_output:
+                    print(json.dumps(hook_output))
+                    if hint_result.hint:
+                        print(f"[Hints] {hint_result.hint}", file=sys.stderr)
+                    sys.exit(0)
+
+        # ===========================================
+        # LOGGING
+        # ===========================================
         # Extract session_id
         session_id = input_data.get('session_id', 'unknown')
 

@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import type { SessionSetting, SessionSettingInput, ProjectSetting, SettingType, ApiResponse, OverrideMode } from '../types'
+import { API_BASE_URL } from '../config'
 
 // Reactive state
 const sessionSettings = ref<SessionSetting[]>([])
@@ -8,7 +9,7 @@ const isLoading = ref(false)
 const error = ref<string | null>(null)
 
 // API base URL
-const API_BASE = 'http://localhost:4000/api'
+const API_BASE = `${API_BASE_URL}/api`
 
 // Track current session for detecting stale requests
 let currentSessionId: string | null = null

@@ -1,30 +1,20 @@
-# Server Dockerfile - Bun runtime
-FROM oven/bun:1.1-alpine AS base
+# Server Dockerfile - Bun runtime (Debian for glibc/ONNX support)
+FROM oven/bun:1.1-debian AS base
 WORKDIR /app
-
-# Install dependencies
-FROM base AS deps
-COPY package.json bun.lock* ./
-RUN bun install --frozen-lockfile --production
-
-# Build stage (if needed for TypeScript)
-FROM base AS builder
-COPY package.json bun.lock* ./
-RUN bun install --frozen-lockfile
-COPY . .
-# TypeScript check (optional)
-RUN bun run typecheck 2>/dev/null || true
 
 # Production image
 FROM base AS runner
 ENV NODE_ENV=production
 
 # Create app user
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 bunjs
+RUN groupadd --system --gid 1001 nodejs && \
+    useradd --system --uid 1001 --gid nodejs bunjs
 
-# Copy dependencies
-COPY --from=deps /app/node_modules ./node_modules
+# Copy package.json only (skip lockfile due to version mismatch)
+COPY package.json ./
+
+# Install dependencies
+RUN bun install --production
 
 # Copy source code
 COPY --chown=bunjs:nodejs . .
@@ -37,7 +27,7 @@ USER bunjs
 EXPOSE 4000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:4000/health || exit 1
 
 CMD ["bun", "run", "src/index.ts"]

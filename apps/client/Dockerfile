@@ -1,24 +1,25 @@
-# Client Dockerfile - Build with Bun, serve with Nginx
+# Client Dockerfile - Build with Bun, serve with Nginx Gateway
 FROM oven/bun:1.1-alpine AS builder
 WORKDIR /app
 
-# Copy package files
 COPY package.json bun.lock* ./
+RUN bun install
 
-# Install dependencies
-RUN bun install --frozen-lockfile
-
-# Copy source code
 COPY . .
-
-# Build the application
-RUN bun run build
+RUN bun run vite build
 
 # Production image with Nginx
 FROM nginx:alpine AS runner
 
-# Copy custom nginx config
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Install envsubst (gettext)
+RUN apk add --no-cache gettext
+
+# Copy nginx config template
+COPY nginx.conf.template /etc/nginx/conf.d/default.conf.template
+
+# Copy entrypoint script
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
 # Copy built assets
 COPY --from=builder /app/dist /usr/share/nginx/html
@@ -29,4 +30,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 EXPOSE 80
 
+ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["nginx", "-g", "daemon off;"]

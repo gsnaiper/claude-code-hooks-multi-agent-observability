@@ -1,9 +1,27 @@
 import json
 import socket
 import asyncio
+import os
 from threading import Thread
 from typing import Optional, Dict, Any, Literal
+from pathlib import Path
 import time
+
+# Load .env for configuration
+try:
+    from dotenv import load_dotenv
+    _env_path = Path.home() / '.claude' / '.env'
+    if _env_path.exists():
+        load_dotenv(_env_path)
+except ImportError:
+    pass  # dotenv not available, use defaults
+
+
+def get_observability_url() -> str:
+    """Get observability server URL from environment or default."""
+    url = os.environ.get('OBSERVABILITY_SERVER_URL', 'http://localhost:4000/events')
+    # Remove /events suffix if present (we add it when needed)
+    return url.replace('/events', '').rstrip('/')
 
 
 class HITLRequest:
@@ -16,8 +34,10 @@ class HITLRequest:
         choices: Optional[list[str]] = None,
         context: Optional[Dict[str, Any]] = None,  # Additional context for approval
         timeout: int = 300,  # 5 minutes default
-        observability_url: str = "http://localhost:4000"
+        observability_url: Optional[str] = None
     ):
+        if observability_url is None:
+            observability_url = get_observability_url()
         self.question = question
         self.hitl_type = hitl_type
         self.choices = choices
@@ -85,13 +105,60 @@ class HITLRequest:
             data["context"] = self.context
         return data
 
+    def _poll_for_response(self, event_id: int) -> Optional[Dict[str, Any]]:
+        """Poll server for HITL response using GET /events/:id/response with exponential backoff"""
+        import urllib.request
+        import urllib.error
+        import random
+
+        start_time = time.time()
+        attempt = 0
+        max_interval = 10.0  # Max wait between polls
+        max_retries = 300  # Max number of poll attempts
+
+        while time.time() - start_time < self.timeout and attempt < max_retries:
+            attempt += 1
+            try:
+                url = f"{self.observability_url}/events/{event_id}/response"
+                req = urllib.request.Request(url, method='GET')
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    data = json.loads(response.read().decode('utf-8'))
+                    if data.get('success') and data.get('data'):
+                        return data['data']
+            except urllib.error.HTTPError as e:
+                if e.code in (404, 202):
+                    # No response yet (404 or 202 Accepted), continue polling
+                    pass
+                elif e.code in (400, 403, 405):
+                    # Non-retryable errors - fail immediately
+                    print(f"[HITL] Fatal HTTP error: {e.code}", file=__import__('sys').stderr)
+                    return None
+                elif e.code == 429:
+                    # Rate limited - use longer backoff
+                    time.sleep(min(30, 5 * (2 ** min(attempt, 4))))
+                    continue
+                else:
+                    print(f"[HITL] HTTP error polling: {e.code}", file=__import__('sys').stderr)
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                print(f"[HITL] Invalid response format: {e}", file=__import__('sys').stderr)
+            except urllib.error.URLError as e:
+                print(f"[HITL] Network error: {e.reason}", file=__import__('sys').stderr)
+            except Exception as e:
+                print(f"[HITL] Unexpected error: {type(e).__name__}: {e}", file=__import__('sys').stderr)
+
+            # Exponential backoff with jitter (1s, 2s, 4s... up to max_interval)
+            backoff = min(max_interval, (2 ** min(attempt - 1, 4)) + random.uniform(0, 0.5))
+            time.sleep(backoff)
+
+        return None  # Timeout or max retries
+
     def send_and_wait(
         self,
         hook_event_data: Dict[str, Any],
         session_data: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """
-        Send HITL request and wait for response
+        Send HITL request and wait for response using polling.
 
         Args:
             hook_event_data: The hook event payload
@@ -100,7 +167,7 @@ class HITLRequest:
         Returns:
             Response data or None if timeout
         """
-        # Prepare complete event with HITL data FIRST (parallel prep)
+        # Prepare complete event with HITL data
         event_payload = {
             **session_data,
             "hook_event_type": hook_event_data.get("hook_event_type", "HumanInTheLoop"),
@@ -109,14 +176,8 @@ class HITLRequest:
             "timestamp": int(time.time() * 1000)
         }
 
-        # Start local server in background thread
-        self.server_thread = Thread(target=self._start_response_server, daemon=True)
-        self.server_thread.start()
-
-        # Minimal delay - just enough for socket to bind (reduced from 0.5s)
-        time.sleep(0.1)
-
-        # Send to observability server immediately
+        # Send to observability server
+        event_id = None
         try:
             import requests
             response = requests.post(
@@ -125,17 +186,26 @@ class HITLRequest:
                 timeout=10
             )
             response.raise_for_status()
+            # Extract event ID from response
+            result = response.json()
+            event_id = result.get('id')
         except ImportError:
-            print("Warning: requests package not installed. Install with: pip install requests")
+            print("Warning: requests package not installed. Install with: pip install requests", file=__import__('sys').stderr)
             return None
         except Exception as e:
-            print(f"Failed to send HITL request: {e}")
+            print(f"[HITL] Failed to send request: {e}", file=__import__('sys').stderr)
             return None
 
-        # Wait for response
-        self.server_thread.join(timeout=self.timeout)
+        # Validate event_id is a positive integer
+        if not isinstance(event_id, int) or event_id <= 0:
+            print(f"[HITL] Invalid event ID returned: {event_id} (type: {type(event_id).__name__})", file=__import__('sys').stderr)
+            return None
 
-        return self.response_data
+        # Small delay to ensure database write is committed
+        time.sleep(0.1)
+
+        # Poll for response
+        return self._poll_for_response(event_id)
 
 
 # Convenience functions

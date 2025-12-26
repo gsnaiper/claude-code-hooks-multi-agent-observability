@@ -1,7 +1,12 @@
 // Centralized configuration for API and WebSocket URLs
-// Uses environment variables to support dynamic port configuration for worktrees
+// Uses relative URLs for gateway mode, with fallback for dev mode
 
-const SERVER_PORT = import.meta.env.VITE_API_PORT || '4000';
+// Determine WebSocket protocol based on page protocol
+const wsProtocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const host = typeof window !== 'undefined' ? window.location.host : 'localhost:5173';
 
-export const API_BASE_URL = import.meta.env.VITE_API_URL || `http://localhost:${SERVER_PORT}`;
-export const WS_URL = import.meta.env.VITE_WS_URL || `ws://localhost:${SERVER_PORT}/stream`;
+// API base - relative URL (goes through nginx proxy in production)
+export const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+
+// WebSocket URL - uses current host (goes through nginx proxy in production)
+export const WS_URL = import.meta.env.VITE_WS_URL || `${wsProtocol}//${host}/stream`;

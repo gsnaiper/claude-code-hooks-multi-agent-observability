@@ -135,18 +135,56 @@ try {
 // Store WebSocket clients
 const wsClients = new Set<any>();
 
+// Validate WebSocket URL to prevent SSRF attacks
+function validateWebSocketUrl(wsUrl: string): boolean {
+  try {
+    const url = new URL(wsUrl);
+    // Only allow ws/wss protocols
+    if (!['ws:', 'wss:'].includes(url.protocol)) {
+      console.warn(`[HITL] Invalid WebSocket protocol: ${url.protocol}`);
+      return false;
+    }
+    // Only allow localhost connections to prevent SSRF
+    const allowedHosts = ['localhost', '127.0.0.1', '[::1]', '::1'];
+    if (!allowedHosts.includes(url.hostname)) {
+      console.warn(`[HITL] WebSocket URL rejected - only localhost allowed: ${url.hostname}`);
+      return false;
+    }
+    // Validate port is reasonable (1024-65535)
+    const port = url.port ? parseInt(url.port) : (url.protocol === 'wss:' ? 443 : 80);
+    if (port < 1024 || port > 65535) {
+      console.warn(`[HITL] WebSocket port out of range: ${port}`);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn(`[HITL] Invalid WebSocket URL format: ${wsUrl}`);
+    return false;
+  }
+}
+
 // Helper function to send response to agent via WebSocket
 async function sendResponseToAgent(
   wsUrl: string,
   response: HumanInTheLoopResponse
 ): Promise<void> {
+  // Validate URL before connecting (SSRF prevention)
+  if (!validateWebSocketUrl(wsUrl)) {
+    throw new Error(`Invalid WebSocket URL: ${wsUrl}`);
+  }
+
   console.log(`[HITL] Connecting to agent WebSocket: ${wsUrl}`);
 
   return new Promise((resolve, reject) => {
     let ws: WebSocket | null = null;
     let isResolved = false;
+    let connectionTimeout: ReturnType<typeof setTimeout> | null = null;
 
     const cleanup = () => {
+      if (connectionTimeout) {
+        clearTimeout(connectionTimeout);
+        connectionTimeout = null;
+      }
       if (ws) {
         try {
           ws.close();
@@ -155,6 +193,16 @@ async function sendResponseToAgent(
         }
       }
     };
+
+    // Connection timeout (5 seconds)
+    connectionTimeout = setTimeout(() => {
+      if (!isResolved) {
+        console.warn('[HITL] WebSocket connection timeout');
+        cleanup();
+        isResolved = true;
+        reject(new Error('WebSocket connection timeout'));
+      }
+    }, 5000);
 
     try {
       ws = new WebSocket(wsUrl);
@@ -480,8 +528,62 @@ const server = Bun.serve({
       }
     }
 
+    // GET /events/:id/response - Poll for HITL response (for hooks that can't receive WebSocket)
+    if (url.pathname.match(/^\/events\/\d+\/response$/) && req.method === 'GET') {
+      const id = parseInt(url.pathname.split('/')[2]);
+
+      try {
+        const event = await getEventById(id);
+
+        if (!event) {
+          return new Response(JSON.stringify({ success: false, error: 'Event not found' }), {
+            status: 404,
+            headers: { ...headers, 'Content-Type': 'application/json' }
+          });
+        }
+
+        // Validate this is a HITL event
+        if (!event.humanInTheLoop) {
+          return new Response(JSON.stringify({ success: false, error: 'Event is not a HITL request' }), {
+            status: 400,
+            headers: { ...headers, 'Content-Type': 'application/json' }
+          });
+        }
+
+        // Check if there's a HITL response
+        if (event.humanInTheLoopStatus?.status === 'responded' && event.humanInTheLoopStatus?.response) {
+          return new Response(JSON.stringify({
+            success: true,
+            data: event.humanInTheLoopStatus.response
+          }), {
+            headers: { ...headers, 'Content-Type': 'application/json' }
+          });
+        }
+
+        // No response yet - return 202 Accepted (processing) with Retry-After hint
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'No response yet',
+          status: event.humanInTheLoopStatus?.status || 'pending'
+        }), {
+          status: 202,
+          headers: {
+            ...headers,
+            'Content-Type': 'application/json',
+            'Retry-After': '2'  // Suggest polling every 2 seconds
+          }
+        });
+      } catch (error) {
+        console.error('Error fetching HITL response:', error);
+        return new Response(JSON.stringify({ success: false, error: 'Server error' }), {
+          status: 500,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
     // Theme API endpoints
-    
+
     // POST /api/themes - Create a new theme
     if (url.pathname === '/api/themes' && req.method === 'POST') {
       try {

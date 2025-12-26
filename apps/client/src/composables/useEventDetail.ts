@@ -1,7 +1,8 @@
 import { ref, reactive } from 'vue';
 import type { HookEvent } from '../types';
+import { API_BASE_URL } from '../config';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000';
+const API_BASE = API_BASE_URL;
 
 // Cache for event details (persists across component instances)
 const eventCache = reactive<Map<number, HookEvent>>(new Map());

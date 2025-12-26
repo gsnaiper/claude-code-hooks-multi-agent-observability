@@ -250,8 +250,84 @@
             </div>
           </div>
 
-          <!-- Response Input with Voice -->
-          <div class="relative">
+          <!-- Options Selection (if available) -->
+          <div v-if="questionOptions.length > 0" class="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-lg border border-gray-200 dark:border-gray-700">
+            <p class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
+              {{ isMultiSelect ? 'Select one or more options:' : 'Choose an option:' }}
+            </p>
+
+            <!-- Single Select (Radio Buttons) -->
+            <div v-if="!isMultiSelect" class="space-y-2">
+              <label
+                v-for="option in questionOptions"
+                :key="option.label"
+                class="flex items-start gap-3 p-2 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors"
+                :class="selectedOption === option.label ? 'bg-blue-50 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-600' : ''"
+              >
+                <input
+                  type="radio"
+                  :value="option.label"
+                  v-model="selectedOption"
+                  @change="showOtherInput = false; responseText = option.label"
+                  class="mt-1 w-4 h-4 text-blue-600"
+                />
+                <div>
+                  <span class="font-medium text-gray-900 dark:text-gray-100">{{ option.label }}</span>
+                  <p v-if="option.description" class="text-sm text-gray-500 dark:text-gray-400">{{ option.description }}</p>
+                </div>
+              </label>
+              <!-- Other option -->
+              <label
+                class="flex items-start gap-3 p-2 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors"
+                :class="showOtherInput ? 'bg-purple-50 dark:bg-purple-900/30 border border-purple-300 dark:border-purple-600' : ''"
+              >
+                <input
+                  type="radio"
+                  value="__other__"
+                  v-model="selectedOption"
+                  @change="showOtherInput = true; responseText = ''"
+                  class="mt-1 w-4 h-4 text-purple-600"
+                />
+                <div>
+                  <span class="font-medium text-gray-900 dark:text-gray-100">✏️ Other (custom answer)</span>
+                  <p class="text-sm text-gray-500 dark:text-gray-400">Type your own response below</p>
+                </div>
+              </label>
+            </div>
+
+            <!-- Multi Select (Checkboxes) -->
+            <div v-else class="space-y-2">
+              <label
+                v-for="option in questionOptions"
+                :key="option.label"
+                class="flex items-start gap-3 p-2 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors"
+                :class="selectedOptions.includes(option.label) ? 'bg-blue-50 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-600' : ''"
+              >
+                <input
+                  type="checkbox"
+                  :value="option.label"
+                  v-model="selectedOptions"
+                  @change="responseText = selectedOptions.join(', ')"
+                  class="mt-1 w-4 h-4 text-blue-600 rounded"
+                />
+                <div>
+                  <span class="font-medium text-gray-900 dark:text-gray-100">{{ option.label }}</span>
+                  <p v-if="option.description" class="text-sm text-gray-500 dark:text-gray-400">{{ option.description }}</p>
+                </div>
+              </label>
+              <!-- Toggle for custom input -->
+              <button
+                @click.stop="showOtherInput = !showOtherInput"
+                class="flex items-center gap-2 p-2 text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/30 rounded-lg transition-colors"
+              >
+                <span>✏️</span>
+                <span class="font-medium">{{ showOtherInput ? 'Hide custom input' : 'Add custom answer' }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Response Input with Voice (shown always for "Other" or when no options) -->
+          <div class="relative" v-if="questionOptions.length === 0 || showOtherInput">
             <textarea
               v-model="responseText"
               class="w-full p-3 pr-14 border-2 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none transition-colors"
@@ -537,6 +613,23 @@ const approvalComment = ref(''); // For approval type HITL
 const isSubmitting = ref(false);
 const hasSubmittedResponse = ref(false);
 const localResponse = ref<HumanInTheLoopResponse | null>(null); // Optimistic UI
+
+// Options selection for question_input type
+const selectedOption = ref<string>(''); // For single-select (radio)
+const selectedOptions = ref<string[]>([]); // For multi-select (checkboxes)
+const showOtherInput = ref(false); // Show text input when "Other" is selected
+
+// Computed: Extract question options from HITL context
+const questionOptions = computed(() => {
+  const ctx = props.event.humanInTheLoop?.context;
+  if (!ctx?.questions?.[0]?.options) return [];
+  return ctx.questions[0].options;
+});
+
+const isMultiSelect = computed(() => {
+  const ctx = props.event.humanInTheLoop?.context;
+  return ctx?.questions?.[0]?.multiSelect === true;
+});
 
 // Media query for responsive design
 const { isMobile } = useMediaQuery();
