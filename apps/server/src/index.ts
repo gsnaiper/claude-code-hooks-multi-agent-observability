@@ -921,9 +921,9 @@ const server = Bun.serve({
 
         const data = await response.json();
         return new Response(JSON.stringify({
-          characterCount: data.character_count,
-          characterLimit: data.character_limit,
-          nextResetUnix: data.next_character_count_reset_unix,
+          character_count: data.character_count,
+          character_limit: data.character_limit,
+          next_character_count_reset_unix: data.next_character_count_reset_unix,
           tier: data.tier,
           status: data.status
         }), {

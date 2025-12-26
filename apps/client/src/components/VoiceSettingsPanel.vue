@@ -33,8 +33,8 @@
                 :class="settings.enabled ? 'bg-green-500' : 'bg-gray-400'"
               >
                 <span
-                  class="absolute top-1 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200"
-                  :class="settings.enabled ? 'translate-x-8' : 'translate-x-1'"
+                  class="absolute top-1 left-0 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200"
+                  :class="settings.enabled ? 'translate-x-7' : 'translate-x-1'"
                 ></span>
               </button>
             </div>
