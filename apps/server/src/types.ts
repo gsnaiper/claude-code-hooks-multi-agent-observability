@@ -89,7 +89,7 @@ export function toEventSummary(event: HookEvent): EventSummary {
     // HITL
     has_hitl: !!event.humanInTheLoop,
     hitl_type: event.humanInTheLoop?.type,
-    hitl_status: event.humanInTheLoop ? (event.humanInTheLoopStatus ? 'responded' : 'pending') : undefined,
+    hitl_status: event.humanInTheLoop ? (event.humanInTheLoopStatus?.status || 'pending') : undefined,
     // Keep full HITL for real-time events
     humanInTheLoop: event.humanInTheLoop,
     humanInTheLoopStatus: event.humanInTheLoopStatus
