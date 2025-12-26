@@ -1,4 +1,4 @@
-# Claude Code Multi Agent Observability
+# MMM - Multi Manager Mobile
 
 ## Instructions
 > Follow these instructions as you work through the project.

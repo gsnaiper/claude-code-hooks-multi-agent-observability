@@ -1,4 +1,4 @@
-# Multi-Agent Observability System
+# MMM - Multi Manager Mobile
 
 Real-time monitoring and visualization for Claude Code agents through comprehensive hook event tracking. You can watch the [full breakdown here](https://youtu.be/9ijnN985O_c) and watch the latest enhancement where we compare Haiku 4.5 and Sonnet 4.5 [here](https://youtu.be/aA9KP7QIQvM).
 
@@ -6,7 +6,7 @@ Real-time monitoring and visualization for Claude Code agents through comprehens
 
 This system provides complete observability into Claude Code agent behavior by capturing, storing, and visualizing Claude Code [Hook events](https://docs.anthropic.com/en/docs/claude-code/hooks) in real-time. It enables monitoring of multiple concurrent agents with session tracking, event filtering, and live updates. 
 
-<img src="images/app.png" alt="Multi-Agent Observability Dashboard" style="max-width: 800px; width: 100%;">
+<img src="images/app.png" alt="MMM Dashboard" style="max-width: 800px; width: 100%;">
 
 ## 🏗️ Architecture
 

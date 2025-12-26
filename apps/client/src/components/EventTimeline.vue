@@ -83,6 +83,7 @@
           :app-gradient-class="getGradientForApp(event.source_app)"
           :app-color-class="getColorForApp(event.source_app)"
           :app-hex-color="getHexColorForApp(event.source_app)"
+          @filter="addFilterCondition"
         />
       </TransitionGroup>
       
@@ -123,6 +124,21 @@ const emit = defineEmits<{
 const scrollContainer = ref<HTMLElement>();
 const { getGradientForSession, getColorForSession, getGradientForApp, getColorForApp, getHexColorForApp } = useEventColors();
 const { searchPattern, searchError, searchEvents, updateSearchPattern, clearSearch } = useEventSearch();
+
+// Add filter condition from clickable tags
+const addFilterCondition = ({ field, value }: { field: string; value: string }) => {
+  const condition = `${field}:${value}`;
+
+  // Skip if this exact condition is already in the search
+  if (searchPattern.value.includes(condition)) return;
+
+  // Append with space (AND logic) or set as new search
+  if (searchPattern.value.trim()) {
+    updateSearchPattern(`${searchPattern.value.trim()} ${condition}`);
+  } else {
+    updateSearchPattern(condition);
+  }
+};
 
 // Use all agent IDs, preferring allAppNames if available (all ever seen), fallback to uniqueAppNames (active in time window)
 const displayedAgentIds = computed(() => {

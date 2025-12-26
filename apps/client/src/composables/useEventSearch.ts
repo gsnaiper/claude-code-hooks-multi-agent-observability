@@ -66,24 +66,63 @@ export function useEventSearch() {
     return parts.join(' ').toLowerCase();
   };
 
-  // Check if event matches pattern
-  const matchesPattern = (event: EventSummary, pattern: string): boolean => {
-    if (!pattern || pattern.trim() === '') {
-      return true;
+  // Get value for a specific field from event
+  const getFieldValue = (event: EventSummary, field: string): string | undefined => {
+    const fieldMap: Record<string, () => string | undefined> = {
+      source_app: () => event.source_app,
+      session_id: () => event.session_id,
+      hook_event_type: () => event.hook_event_type,
+      tool_name: () => event.tool_name,
+      model_name: () => event.model_name ?? undefined,
+      tool_command: () => event.tool_command ?? undefined,
+      tool_file_path: () => event.tool_file_path ?? undefined,
+      summary: () => event.summary ?? undefined,
+      hitl_type: () => event.hitl_type ?? undefined,
+    };
+    return fieldMap[field]?.();
+  };
+
+  // Check if event matches a single condition (field:value or regex)
+  const matchesSingleCondition = (event: EventSummary, condition: string): boolean => {
+    // Check for field:value syntax
+    const fieldMatch = condition.match(/^(\w+):(.+)$/);
+    if (fieldMatch) {
+      const [, field, value] = fieldMatch;
+      const eventValue = getFieldValue(event, field);
+      if (!eventValue) return false;
+      return eventValue.toLowerCase().includes(value.toLowerCase());
     }
 
-    const validation = validateRegex(pattern);
-    if (!validation.valid) {
-      return false;
-    }
+    // Regular regex on all fields
+    const validation = validateRegex(condition);
+    if (!validation.valid) return false;
 
     try {
-      const regex = new RegExp(pattern, 'i'); // Case-insensitive
+      const regex = new RegExp(condition, 'i');
       const searchableText = getSearchableText(event);
       return regex.test(searchableText);
     } catch {
       return false;
     }
+  };
+
+  // Check if event matches pattern (supports space-separated conditions with AND logic)
+  const matchesPattern = (event: EventSummary, pattern: string): boolean => {
+    if (!pattern || pattern.trim() === '') {
+      return true;
+    }
+
+    // Split by spaces to get individual conditions
+    const conditions = pattern.split(/\s+/).filter(Boolean);
+
+    // All conditions must match (AND logic)
+    for (const condition of conditions) {
+      if (!matchesSingleCondition(event, condition)) {
+        return false;
+      }
+    }
+
+    return true;
   };
 
   // Filter events by pattern

@@ -402,12 +402,15 @@
       <div class="hidden mobile:block mb-2">
         <!-- Mobile: App + Time on first row -->
         <div class="flex items-center justify-between mb-1">
-          <span
-            class="text-xs font-semibold text-[var(--theme-text-primary)] px-1.5 py-0.5 rounded-full border-2 bg-[var(--theme-bg-tertiary)] shadow-md"
-            :style="{ ...appBgStyle, ...appBorderStyle }"
+          <ClickableTag
+            field="source_app"
+            :value="event.source_app"
+            custom-class="text-xs font-semibold text-[var(--theme-text-primary)] px-1.5 py-0.5 border-2 bg-[var(--theme-bg-tertiary)] shadow-md"
+            :custom-style="{ ...appBgStyle, ...appBorderStyle }"
+            @filter="handleTagFilter"
           >
             {{ event.source_app }}
-          </span>
+          </ClickableTag>
           <div class="flex items-center space-x-1">
             <span class="text-xs text-[var(--theme-text-tertiary)] font-medium">
               {{ formatTime(event.timestamp) }}
@@ -426,41 +429,78 @@
             </button>
           </div>
         </div>
-        
+
         <!-- Mobile: Session + Event Type on second row -->
         <div class="flex items-center space-x-2">
-          <span class="text-xs text-[var(--theme-text-secondary)] px-1.5 py-0.5 rounded-full border bg-[var(--theme-bg-tertiary)]/50" :class="borderColorClass">
+          <ClickableTag
+            field="session_id"
+            :value="event.session_id"
+            :custom-class="`text-xs text-[var(--theme-text-secondary)] px-1.5 py-0.5 border bg-[var(--theme-bg-tertiary)]/50 ${borderColorClass}`"
+            @filter="handleTagFilter"
+          >
             {{ sessionIdShort }}
-          </span>
-          <span v-if="event.model_name" class="text-xs text-[var(--theme-text-secondary)] px-1.5 py-0.5 rounded-full border bg-[var(--theme-bg-tertiary)]/50 shadow-sm" :title="`Model: ${event.model_name}`">
+          </ClickableTag>
+          <ClickableTag
+            v-if="event.model_name"
+            field="model_name"
+            :value="event.model_name"
+            custom-class="text-xs text-[var(--theme-text-secondary)] px-1.5 py-0.5 border bg-[var(--theme-bg-tertiary)]/50 shadow-sm"
+            :title="`Model: ${event.model_name}`"
+            @filter="handleTagFilter"
+          >
             <span class="mr-0.5">🧠</span>{{ formatModelName(event.model_name) }}
-          </span>
-          <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-bold bg-[var(--theme-primary)] text-white shadow-md">
+          </ClickableTag>
+          <ClickableTag
+            field="hook_event_type"
+            :value="event.hook_event_type"
+            custom-class="px-1.5 py-0.5 text-xs font-bold bg-[var(--theme-primary)] text-white shadow-md"
+            @filter="handleTagFilter"
+          >
             <span class="mr-1 text-sm">{{ hookEmoji }}</span>
             {{ event.hook_event_type }}
-          </span>
+          </ClickableTag>
         </div>
       </div>
 
       <!-- Desktop Layout: Original single row layout -->
       <div class="flex items-center justify-between mb-2 mobile:hidden">
         <div class="flex items-center space-x-4">
-          <span
-            class="text-base font-bold text-[var(--theme-text-primary)] px-2 py-0.5 rounded-full border-2 bg-[var(--theme-bg-tertiary)] shadow-lg"
-            :style="{ ...appBgStyle, ...appBorderStyle }"
+          <ClickableTag
+            field="source_app"
+            :value="event.source_app"
+            custom-class="text-base font-bold text-[var(--theme-text-primary)] px-2 py-0.5 border-2 bg-[var(--theme-bg-tertiary)] shadow-lg"
+            :custom-style="{ ...appBgStyle, ...appBorderStyle }"
+            @filter="handleTagFilter"
           >
             {{ event.source_app }}
-          </span>
-          <span class="text-sm text-[var(--theme-text-secondary)] px-2 py-0.5 rounded-full border bg-[var(--theme-bg-tertiary)]/50 shadow-md" :class="borderColorClass">
+          </ClickableTag>
+          <ClickableTag
+            field="session_id"
+            :value="event.session_id"
+            :custom-class="`text-sm text-[var(--theme-text-secondary)] px-2 py-0.5 border bg-[var(--theme-bg-tertiary)]/50 shadow-md ${borderColorClass}`"
+            @filter="handleTagFilter"
+          >
             {{ sessionIdShort }}
-          </span>
-          <span v-if="event.model_name" class="text-sm text-[var(--theme-text-secondary)] px-2 py-0.5 rounded-full border bg-[var(--theme-bg-tertiary)]/50 shadow-md" :title="`Model: ${event.model_name}`">
+          </ClickableTag>
+          <ClickableTag
+            v-if="event.model_name"
+            field="model_name"
+            :value="event.model_name"
+            custom-class="text-sm text-[var(--theme-text-secondary)] px-2 py-0.5 border bg-[var(--theme-bg-tertiary)]/50 shadow-md"
+            :title="`Model: ${event.model_name}`"
+            @filter="handleTagFilter"
+          >
             <span class="mr-1">🧠</span>{{ formatModelName(event.model_name) }}
-          </span>
-          <span class="inline-flex items-center px-3 py-0.5 rounded-full text-sm font-bold bg-[var(--theme-primary)] text-white shadow-lg">
+          </ClickableTag>
+          <ClickableTag
+            field="hook_event_type"
+            :value="event.hook_event_type"
+            custom-class="px-3 py-0.5 text-sm font-bold bg-[var(--theme-primary)] text-white shadow-lg"
+            @filter="handleTagFilter"
+          >
             <span class="mr-1.5 text-base">{{ hookEmoji }}</span>
             {{ event.hook_event_type }}
-          </span>
+          </ClickableTag>
         </div>
         <div class="flex items-center space-x-2">
           <span class="text-sm text-[var(--theme-text-tertiary)] font-semibold">
@@ -484,7 +524,16 @@
       <!-- Tool info and Summary - Desktop Layout -->
       <div class="flex items-center justify-between mb-2 mobile:hidden">
         <div v-if="toolInfo" class="text-base text-[var(--theme-text-secondary)] font-semibold flex flex-wrap items-baseline gap-2">
-          <span class="font-medium italic px-2 py-0.5 rounded border-2 border-[var(--theme-primary)] bg-[var(--theme-primary-light)] shadow-sm">{{ toolInfo.tool }}</span>
+          <ClickableTag
+            v-if="event.tool_name"
+            field="tool_name"
+            :value="event.tool_name"
+            custom-class="font-medium italic px-2 py-0.5 border-2 border-[var(--theme-primary)] bg-[var(--theme-primary-light)] shadow-sm"
+            @filter="handleTagFilter"
+          >
+            {{ toolInfo.tool }}
+          </ClickableTag>
+          <span v-else class="font-medium italic px-2 py-0.5 rounded border-2 border-[var(--theme-primary)] bg-[var(--theme-primary-light)] shadow-sm">{{ toolInfo.tool }}</span>
           <span v-if="toolInfo.detail" class="text-[var(--theme-text-tertiary)] font-mono text-sm break-all" :class="{ 'italic': event.hook_event_type === 'UserPromptSubmit' }">{{ toolInfo.detail }}</span>
           <span v-if="toolInfo.description" class="text-[var(--theme-text-quaternary)] text-sm italic">— {{ toolInfo.description }}</span>
         </div>
@@ -501,7 +550,16 @@
       <!-- Tool info and Summary - Mobile Layout -->
       <div class="space-y-2 hidden mobile:block mb-2">
         <div v-if="toolInfo" class="text-sm text-[var(--theme-text-secondary)] font-semibold w-full flex flex-wrap items-baseline gap-1.5">
-          <span class="font-medium italic px-1.5 py-0.5 rounded border-2 border-[var(--theme-primary)] bg-[var(--theme-primary-light)] shadow-sm">{{ toolInfo.tool }}</span>
+          <ClickableTag
+            v-if="event.tool_name"
+            field="tool_name"
+            :value="event.tool_name"
+            custom-class="font-medium italic px-1.5 py-0.5 border-2 border-[var(--theme-primary)] bg-[var(--theme-primary-light)] shadow-sm"
+            @filter="handleTagFilter"
+          >
+            {{ toolInfo.tool }}
+          </ClickableTag>
+          <span v-else class="font-medium italic px-1.5 py-0.5 rounded border-2 border-[var(--theme-primary)] bg-[var(--theme-primary-light)] shadow-sm">{{ toolInfo.tool }}</span>
           <span v-if="toolInfo.detail" class="text-[var(--theme-text-tertiary)] font-mono text-xs break-all" :class="{ 'italic': event.hook_event_type === 'UserPromptSubmit' }">{{ toolInfo.detail }}</span>
           <span v-if="toolInfo.description" class="text-[var(--theme-text-quaternary)] text-xs italic">— {{ toolInfo.description }}</span>
         </div>
@@ -582,6 +640,7 @@ import { useVoiceInput } from '../composables/useVoiceInput';
 import { useVoiceNotifications } from '../composables/useVoiceNotifications';
 import { useEventDetail } from '../composables/useEventDetail';
 import ChatTranscriptModal from './ChatTranscriptModal.vue';
+import ClickableTag from './ClickableTag.vue';
 import { API_BASE_URL } from '../config';
 
 const props = defineProps<{
@@ -600,7 +659,13 @@ const detailLoadError = ref<string | null>(null);
 
 const emit = defineEmits<{
   (e: 'response-submitted', response: HumanInTheLoopResponse): void;
+  (e: 'filter', payload: { field: string; value: string }): void;
 }>();
+
+// Handler for clickable tag filters
+const handleTagFilter = (payload: { field: string; value: string }) => {
+  emit('filter', payload);
+};
 
 // Existing refs
 const isExpanded = ref(false);

@@ -1,19 +1,19 @@
 # Demo Claude Code Agent
 
-This is a demonstration agent showing how to integrate Claude Code hooks with the Multi-Agent Observability system.
+This is a demonstration agent showing how to integrate Claude Code hooks with MMM (Multi Manager Mobile).
 
 ## Setup
 
 1. Copy the `.claude` directory to your Claude Code project
 2. Update the `--source-app` parameter in `.claude/settings.json` to identify your agent (currently set to `demo-agent`)
-3. Optionally update the `--server-url` if your observability server runs on a different host/port
+3. Optionally update the `--server-url` if your MMM server runs on a different host/port
 
 ## Directory Structure
 
 ```
 .claude/
 ├── hooks/              # Hook scripts
-│   ├── send_event.py  # Core event sender (sends to observability server)
+│   ├── send_event.py  # Core event sender (sends to MMM server)
 │   ├── pre_tool_use.py    # Validates and blocks dangerous commands
 │   ├── post_tool_use.py   # Captures tool execution results
 │   ├── notification.py    # Handles user notifications with optional TTS
@@ -34,7 +34,7 @@ cd apps/demo-cc-agent
 claude -p --verbose --model sonnet --output-format stream-json "read the README.md and run ls" > "claude-output.json"
 ```
 
-The hooks will automatically send events to the observability server at `http://localhost:4000/events`.
+The hooks will automatically send events to the MMM server at `http://localhost:4000/events`.
 
 ## Hook Events
 

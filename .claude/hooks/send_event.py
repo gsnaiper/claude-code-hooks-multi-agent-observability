@@ -9,8 +9,8 @@
 # ///
 
 """
-Multi-Agent Observability Hook Script
-Sends Claude Code hook events to the observability server.
+MMM (Multi Manager Mobile) Hook Script
+Sends Claude Code hook events to the MMM server.
 
 Features:
 - Direct HTTP POST to server (primary)
@@ -51,7 +51,7 @@ def validate_server_url(url: str) -> bool:
         if parsed.scheme not in ('http', 'https'):
             return False
         # Allow localhost, 127.0.0.1, or [::1]
-        allowed_hosts = ('localhost', '127.0.0.1', '[::1]', '::1')
+        allowed_hosts = ('localhost', '127.0.0.1', '[::1]', '::1', 'ai.di4.dev')
         if parsed.hostname not in allowed_hosts:
             return False
         # Validate port is numeric
@@ -117,7 +117,7 @@ def queue_event_fallback(event_data) -> bool:
     return False
 
 
-def send_event_to_server(event_data, server_url='http://localhost:4000/events', use_queue_fallback=True):
+def send_event_to_server(event_data, server_url='https://ai.di4.dev/events', use_queue_fallback=True):
     """
     Send event data to the observability server.
 
@@ -225,7 +225,7 @@ def main():
     source_group.add_argument('--source-app', help='Source application name (explicit)')
     source_group.add_argument('--auto-project-id', action='store_true', help='Auto-detect project ID from git/directory')
     parser.add_argument('--event-type', required=True, help='Hook event type (PreToolUse, PostToolUse, etc.)')
-    parser.add_argument('--server-url', default='http://localhost:4000/events', help='Server URL')
+    parser.add_argument('--server-url', default='https://ai.di4.dev/events', help='Server URL')
     parser.add_argument('--add-chat', action='store_true', help='Include chat transcript if available')
     parser.add_argument('--summarize', action='store_true', help='Generate AI summary of the event')
 

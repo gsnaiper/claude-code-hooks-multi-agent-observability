@@ -1,4 +1,4 @@
--- PostgreSQL Schema for Multi-Agent Observability
+-- PostgreSQL Schema for MMM (Multi Manager Mobile)
 -- Optimized for high-volume event ingestion and efficient querying
 
 -- ============================================

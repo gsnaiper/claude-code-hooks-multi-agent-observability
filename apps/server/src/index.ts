@@ -1977,7 +1977,7 @@ const server = Bun.serve({
     }
 
     // Default response
-    return new Response('Multi-Agent Observability Server', {
+    return new Response('MMM - Multi Manager Mobile Server', {
       headers: { ...headers, 'Content-Type': 'text/plain' }
     });
   },
