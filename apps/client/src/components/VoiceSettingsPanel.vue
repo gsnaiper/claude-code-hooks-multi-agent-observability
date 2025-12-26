@@ -454,7 +454,8 @@ const newKeyInput = ref('');
 const newKeyLabel = ref('');
 const isAddingKey = ref(false);
 
-const formatNumber = (n: number): string => {
+const formatNumber = (n: number | undefined | null): string => {
+  if (n === undefined || n === null) return '0';
   return n.toLocaleString();
 };
 
@@ -481,7 +482,9 @@ const maskKey = (key: string): string => {
 // Get usage percent for a single key
 const getKeyUsagePercent = (keyInfo: ApiKeyInfo): number => {
   if (!keyInfo.subscription) return 0;
-  return Math.round((keyInfo.subscription.characterCount / keyInfo.subscription.characterLimit) * 100);
+  const count = keyInfo.subscription.characterCount ?? 0;
+  const limit = keyInfo.subscription.characterLimit ?? 1;
+  return Math.round((count / limit) * 100);
 };
 
 // Get total usage across all keys
