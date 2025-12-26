@@ -25,9 +25,22 @@
         </button>
       </div>
 
-      <!-- Search Bar -->
+      <!-- Controls Row: Collapse Tags Toggle + Search -->
       <div class="mt-3 mobile:mt-2 w-full">
         <div class="flex items-center gap-2 mobile:gap-1">
+          <!-- Collapse Tags Toggle -->
+          <button
+            @click="collapseTags = !collapseTags"
+            :class="[
+              'px-2 py-1.5 rounded-lg text-xs font-bold border transition-all duration-200 whitespace-nowrap',
+              collapseTags
+                ? 'bg-[var(--theme-primary)] text-white border-[var(--theme-primary)]'
+                : 'bg-[var(--theme-bg-tertiary)] text-[var(--theme-text-secondary)] border-[var(--theme-border-primary)] hover:border-[var(--theme-primary)]'
+            ]"
+            title="Toggle tag visibility in event rows"
+          >
+            {{ collapseTags ? '🏷️ Show Tags' : '🏷️ Hide Tags' }}
+          </button>
           <div class="relative flex-1">
             <input
               type="text"
@@ -83,6 +96,7 @@
           :app-gradient-class="getGradientForApp(event.source_app)"
           :app-color-class="getColorForApp(event.source_app)"
           :app-hex-color="getHexColorForApp(event.source_app)"
+          :collapse-tags="collapseTags"
           @filter="addFilterCondition"
         />
       </TransitionGroup>
@@ -124,6 +138,7 @@ const emit = defineEmits<{
 const scrollContainer = ref<HTMLElement>();
 const { getGradientForSession, getColorForSession, getGradientForApp, getColorForApp, getHexColorForApp } = useEventColors();
 const { searchPattern, searchError, searchEvents, updateSearchPattern, clearSearch } = useEventSearch();
+const collapseTags = ref(false);
 
 // Add filter condition from clickable tags
 const addFilterCondition = ({ field, value }: { field: string; value: string }) => {

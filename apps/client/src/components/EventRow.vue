@@ -431,7 +431,7 @@
         </div>
 
         <!-- Mobile: Session + Event Type on second row -->
-        <div class="flex items-center space-x-2">
+        <div class="flex items-center space-x-2" v-show="!collapseTags">
           <ClickableTag
             field="session_id"
             :value="event.session_id"
@@ -475,6 +475,7 @@
             {{ event.source_app }}
           </ClickableTag>
           <ClickableTag
+            v-show="!collapseTags"
             field="session_id"
             :value="event.session_id"
             :custom-class="`text-sm text-[var(--theme-text-secondary)] px-2 py-0.5 border bg-[var(--theme-bg-tertiary)]/50 shadow-md ${borderColorClass}`"
@@ -484,6 +485,7 @@
           </ClickableTag>
           <ClickableTag
             v-if="event.model_name"
+            v-show="!collapseTags"
             field="model_name"
             :value="event.model_name"
             custom-class="text-sm text-[var(--theme-text-secondary)] px-2 py-0.5 border bg-[var(--theme-bg-tertiary)]/50 shadow-md"
@@ -493,6 +495,7 @@
             <span class="mr-1">🧠</span>{{ formatModelName(event.model_name) }}
           </ClickableTag>
           <ClickableTag
+            v-show="!collapseTags"
             field="hook_event_type"
             :value="event.hook_event_type"
             custom-class="px-3 py-0.5 text-sm font-bold bg-[var(--theme-primary)] text-white shadow-lg"
@@ -537,13 +540,39 @@
           <span v-if="toolInfo.detail" class="text-[var(--theme-text-tertiary)] font-mono text-sm break-all" :class="{ 'italic': event.hook_event_type === 'UserPromptSubmit' }">{{ toolInfo.detail }}</span>
           <span v-if="toolInfo.description" class="text-[var(--theme-text-quaternary)] text-sm italic">— {{ toolInfo.description }}</span>
         </div>
-        
+
         <!-- Summary aligned to the right -->
         <div v-if="event.summary" class="max-w-[50%] px-3 py-1.5 bg-[var(--theme-primary)]/10 border border-[var(--theme-primary)]/30 rounded-lg shadow-md">
           <span class="text-sm text-[var(--theme-text-primary)] font-semibold">
             <span class="mr-1">📝</span>
             {{ event.summary }}
           </span>
+        </div>
+      </div>
+
+      <!-- Compact Tool Response - for Bash commands with stdout/stderr -->
+      <div v-if="compactToolResponse && !isExpanded" class="mb-2 mobile:hidden">
+        <div class="font-mono text-xs bg-gray-900 rounded-lg overflow-hidden border border-gray-700">
+          <!-- Compact header with status -->
+          <div class="flex items-center justify-between px-2 py-1 bg-gray-800 text-gray-400 border-b border-gray-700">
+            <span class="flex items-center gap-1">
+              <span>{{ compactToolResponse.exitCode === 0 ? '✅' : '❌' }}</span>
+              <span class="text-gray-500">stdout:</span>
+              <span class="text-green-400">{{ compactToolResponse.stdoutLines }}L</span>
+              <span v-if="compactToolResponse.stderrLines > 0" class="ml-2">
+                <span class="text-gray-500">stderr:</span>
+                <span class="text-red-400">{{ compactToolResponse.stderrLines }}L</span>
+              </span>
+            </span>
+            <button
+              @click.stop="toggleExpanded"
+              class="text-gray-500 hover:text-gray-300 text-xs"
+            >
+              [expand]
+            </button>
+          </div>
+          <!-- Preview of stdout (first 2 lines) -->
+          <div v-if="compactToolResponse.stdoutPreview" class="px-2 py-1 text-green-400 whitespace-pre-wrap break-all max-h-12 overflow-hidden">{{ compactToolResponse.stdoutPreview }}</div>
         </div>
       </div>
 
@@ -650,6 +679,7 @@ const props = defineProps<{
   appGradientClass: string;
   appColorClass: string;
   appHexColor: string;
+  collapseTags?: boolean;
 }>();
 
 // Event detail loading
@@ -791,6 +821,35 @@ const formattedPayload = computed(() => {
 const isLoadingPayload = computed(() => {
   if (!props.event?.id) return false;
   return isExpanded.value && !fullEvent.value && isLoadingDetail(props.event.id);
+});
+
+// Compact tool response for PostToolUse events with stdout/stderr
+const compactToolResponse = computed(() => {
+  if (!props.event) return null;
+  if (props.event.hook_event_type !== 'PostToolUse') return null;
+  if (props.event.tool_name !== 'Bash') return null;
+
+  // Check if we have tool_response data in the event (from EventSummary)
+  const response = (props.event as any).tool_response;
+  if (!response) return null;
+
+  const stdout = response.stdout || '';
+  const stderr = response.stderr || '';
+  const exitCode = response.exitCode ?? (stderr ? 1 : 0);
+
+  const stdoutLines = stdout ? stdout.split('\n').filter((l: string) => l.trim()).length : 0;
+  const stderrLines = stderr ? stderr.split('\n').filter((l: string) => l.trim()).length : 0;
+
+  // Preview first 2 lines of stdout
+  const lines = stdout.split('\n').slice(0, 2);
+  const stdoutPreview = lines.join('\n').substring(0, 150);
+
+  return {
+    exitCode,
+    stdoutLines,
+    stderrLines,
+    stdoutPreview: stdoutPreview || null
+  };
 });
 
 const toolInfo = computed(() => {
