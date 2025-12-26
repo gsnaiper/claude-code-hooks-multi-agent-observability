@@ -893,6 +893,51 @@ const server = Bun.serve({
       });
     }
 
+    // ElevenLabs API Proxy (to avoid CORS issues)
+    if (url.pathname === '/api/elevenlabs/subscription' && req.method === 'POST') {
+      try {
+        const body = await req.json();
+        const { apiKey } = body;
+
+        if (!apiKey) {
+          return new Response(JSON.stringify({ error: 'API key required' }), {
+            status: 400,
+            headers: { ...headers, 'Content-Type': 'application/json' }
+          });
+        }
+
+        const response = await fetch('https://api.elevenlabs.io/v1/user/subscription', {
+          headers: {
+            'xi-api-key': apiKey
+          }
+        });
+
+        if (!response.ok) {
+          return new Response(JSON.stringify({ error: `ElevenLabs API error: ${response.status}` }), {
+            status: response.status,
+            headers: { ...headers, 'Content-Type': 'application/json' }
+          });
+        }
+
+        const data = await response.json();
+        return new Response(JSON.stringify({
+          characterCount: data.character_count,
+          characterLimit: data.character_limit,
+          nextResetUnix: data.next_character_count_reset_unix,
+          tier: data.tier,
+          status: data.status
+        }), {
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      } catch (error) {
+        console.error('[ElevenLabs Proxy] Error:', error);
+        return new Response(JSON.stringify({ error: 'Failed to fetch subscription' }), {
+          status: 500,
+          headers: { ...headers, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
     // ============= PROJECT API =============
 
     // GET /api/projects - List all projects

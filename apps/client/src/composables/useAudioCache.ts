@@ -247,10 +247,12 @@ function createAudioCache() {
     }
 
     try {
-      const response = await fetch('https://api.elevenlabs.io/v1/user/subscription', {
+      const response = await fetch('/api/elevenlabs/subscription', {
+        method: 'POST',
         headers: {
-          'xi-api-key': apiKey
-        }
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ apiKey })
       });
 
       if (!response.ok) {
