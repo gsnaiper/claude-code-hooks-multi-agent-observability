@@ -273,3 +273,8 @@ trees/
 deep_docs
 # LanceDB and model cache
 apps/server/data/
+
+# Large backup files
+backups/*.sql
+backups/**/*.sql
+*.sql.gz
