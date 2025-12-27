@@ -1,6 +1,6 @@
 # Multi-Agent Observability - Development Makefile
 
-.PHONY: help dev server client stop restart clean typecheck logs
+.PHONY: help dev server client stop restart clean typecheck logs test test-hitl test-watch test-coverage test-smoke health-check ci-test
 
 # Default target
 help:
@@ -16,6 +16,15 @@ help:
 	@echo "Checks:"
 	@echo "  typecheck  - Run TypeScript type checking"
 	@echo "  logs       - Show server logs"
+	@echo ""
+	@echo "Testing:"
+	@echo "  test           - Run all tests"
+	@echo "  test-hitl      - Run HITL tests only"
+	@echo "  test-watch     - Run tests in watch mode"
+	@echo "  test-coverage  - Run tests with coverage"
+	@echo "  test-smoke     - Run smoke tests"
+	@echo "  health-check   - Run health check"
+	@echo "  ci-test        - Run CI test suite"
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  clean      - Kill all node/bun processes on dev ports"
@@ -84,3 +93,25 @@ clean:
 	@fuser -k 5174/tcp 2>/dev/null || true
 	@fuser -k 5175/tcp 2>/dev/null || true
 	@echo "Cleanup complete"
+
+# Testing commands
+test:
+	cd apps/server && bun test
+
+test-hitl:
+	cd apps/server && bun test src/hitl/__tests__/
+
+test-watch:
+	cd apps/server && bun test --watch
+
+test-coverage:
+	cd apps/server && bun test --coverage
+
+test-smoke:
+	bun run scripts/hitl-smoke-test.ts
+
+health-check:
+	bun run scripts/hitl-health-check.ts
+
+# CI/CD
+ci-test: test test-smoke

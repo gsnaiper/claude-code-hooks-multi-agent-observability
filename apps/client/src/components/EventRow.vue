@@ -54,7 +54,7 @@
       <!-- Question Text -->
       <div class="mb-4 p-3 bg-white dark:bg-gray-800 rounded-lg border" :class="hasSubmittedResponse || event.humanInTheLoopStatus?.status === 'responded' ? 'border-green-300' : 'border-yellow-300'">
         <p class="text-base font-medium text-gray-900 dark:text-gray-100">
-          {{ event.humanInTheLoop.question }}
+          {{ hitlData?.question }}
         </p>
       </div>
 
@@ -73,10 +73,35 @@
         <div v-if="(localResponse?.choice || event.humanInTheLoopStatus?.response?.choice)" class="text-gray-900 dark:text-gray-100 ml-7">
           {{ localResponse?.choice || event.humanInTheLoopStatus?.response?.choice }}
         </div>
+        <!-- Delivery Status Indicator -->
+        <div v-if="deliveryStatus" class="mt-2 text-xs flex items-center gap-1">
+          <span v-if="deliveryStatus === 'delivered'" class="text-green-400">
+            Agent received response
+          </span>
+          <span v-else-if="deliveryStatus === 'pending_poll'" class="text-blue-400">
+            Agent will receive via polling
+          </span>
+          <span v-else-if="deliveryStatus === 'failed'" class="text-red-400">
+            Failed to deliver to agent
+          </span>
+          <span v-else-if="deliveryStatus === 'no_websocket'" class="text-yellow-400">
+            No WebSocket (agent will poll)
+          </span>
+        </div>
+        <!-- Next Agent Action (populated via WebSocket) -->
+        <div
+          v-if="deliveryStatus === 'delivered'"
+          class="mt-2 pt-2 border-t border-gray-700 text-xs"
+        >
+          <div class="text-gray-400 mb-1">Agent continued with:</div>
+          <div class="flex items-center gap-2 text-gray-300">
+            <span class="text-gray-500">Waiting for next action...</span>
+          </div>
+        </div>
       </div>
 
       <!-- Response UI -->
-      <div v-if="event.humanInTheLoop.type === 'question'">
+      <div v-if="hitlData?.type === 'question'">
         <!-- Text Input for Questions with Voice Input -->
         <div class="relative">
           <textarea
@@ -114,7 +139,7 @@
         </div>
       </div>
 
-      <div v-else-if="event.humanInTheLoop.type === 'permission'">
+      <div v-else-if="hitlData?.type === 'permission'">
         <!-- Yes/No Buttons for Permissions -->
         <div class="flex justify-end items-center space-x-3">
           <div v-if="hasSubmittedResponse || event.humanInTheLoopStatus?.status === 'responded'" class="flex items-center px-3 py-2 bg-green-100 dark:bg-green-900/30 rounded-lg border border-green-500">
@@ -139,11 +164,11 @@
         </div>
       </div>
 
-      <div v-else-if="event.humanInTheLoop.type === 'choice'">
+      <div v-else-if="hitlData?.type === 'choice'">
         <!-- Multiple Choice Buttons -->
         <div class="flex flex-wrap gap-2 justify-end">
           <button
-            v-for="choice in event.humanInTheLoop.choices"
+            v-for="choice in hitlData.choices"
             :key="choice"
             @click.stop="submitChoice(choice)"
             :disabled="isSubmitting || hasSubmittedResponse"
@@ -154,33 +179,33 @@
         </div>
       </div>
 
-      <div v-else-if="event.humanInTheLoop.type === 'approval'">
+      <div v-else-if="hitlData?.type === 'approval'">
         <!-- Approval with optional comment (text/voice input) -->
         <div class="space-y-3">
           <!-- Diff Display for Edit operations -->
-          <div v-if="event.humanInTheLoop.context?.old_string || event.humanInTheLoop.context?.new_string" class="font-mono text-sm bg-gray-900 rounded-lg overflow-hidden">
+          <div v-if="hitlData?.context?.old_string || hitlData?.context?.new_string" class="font-mono text-sm bg-gray-900 rounded-lg overflow-hidden">
             <div class="px-3 py-2 bg-gray-800 text-gray-300 border-b border-gray-700 flex items-center gap-2">
               <span>📝</span>
-              <span class="text-xs">{{ event.humanInTheLoop.context?.file_path || 'File Edit' }}</span>
+              <span class="text-xs">{{ hitlData?.context?.file_path || 'File Edit' }}</span>
             </div>
             <div class="p-3 space-y-1">
-              <div v-if="event.humanInTheLoop.context?.old_string" class="text-red-400 whitespace-pre-wrap break-all">
-                <span class="select-none">- </span>{{ event.humanInTheLoop.context.old_string }}
+              <div v-if="hitlData?.context?.old_string" class="text-red-400 whitespace-pre-wrap break-all">
+                <span class="select-none">- </span>{{ hitlData.context.old_string }}
               </div>
-              <div v-if="event.humanInTheLoop.context?.new_string" class="text-green-400 whitespace-pre-wrap break-all">
-                <span class="select-none">+ </span>{{ event.humanInTheLoop.context.new_string }}
+              <div v-if="hitlData?.context?.new_string" class="text-green-400 whitespace-pre-wrap break-all">
+                <span class="select-none">+ </span>{{ hitlData.context.new_string }}
               </div>
             </div>
           </div>
 
           <!-- Content Preview for Write operations -->
-          <div v-else-if="event.humanInTheLoop.context?.content" class="font-mono text-sm bg-gray-900 rounded-lg overflow-hidden">
+          <div v-else-if="hitlData?.context?.content" class="font-mono text-sm bg-gray-900 rounded-lg overflow-hidden">
             <div class="px-3 py-2 bg-gray-800 text-gray-300 border-b border-gray-700 flex items-center gap-2">
               <span>📄</span>
-              <span class="text-xs">{{ event.humanInTheLoop.context?.file_path || 'New File' }}</span>
+              <span class="text-xs">{{ hitlData?.context?.file_path || 'New File' }}</span>
             </div>
             <div class="p-3 text-green-400 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
-              {{ event.humanInTheLoop.context.content }}
+              {{ hitlData.context.content }}
             </div>
           </div>
 
@@ -236,7 +261,7 @@
         </div>
       </div>
 
-      <div v-else-if="event.humanInTheLoop.type === 'question_input'">
+      <div v-else-if="hitlData?.type === 'question_input'">
         <!-- Question Input - Claude's question redirected to UI -->
         <div class="space-y-3">
           <!-- Claude's Question Display -->
@@ -245,7 +270,7 @@
               <span class="text-2xl">🤖</span>
               <div>
                 <span class="font-bold text-blue-800 dark:text-blue-200">Claude asks:</span>
-                <p class="mt-1 text-blue-900 dark:text-blue-100 whitespace-pre-wrap">{{ event.humanInTheLoop.question }}</p>
+                <p class="mt-1 text-blue-900 dark:text-blue-100 whitespace-pre-wrap">{{ hitlData?.question }}</p>
               </div>
             </div>
           </div>
@@ -374,6 +399,34 @@
               {{ isSubmitting ? '⏳ Sending...' : '✅ Reply' }}
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Timeout Status -->
+    <div
+      v-if="hasHITL && isHITLTimeout"
+      class="mb-4 p-4 rounded-lg border-2 border-orange-500 bg-gradient-to-r from-orange-50 to-orange-100 dark:from-orange-900/20 dark:to-orange-800/20"
+    >
+      <div class="flex items-center gap-2">
+        <span class="text-2xl">⏱️</span>
+        <div>
+          <h3 class="text-lg font-bold text-orange-700 dark:text-orange-300">Request Timed Out</h3>
+          <p class="text-sm text-orange-600 dark:text-orange-400">{{ hitlData?.question }}</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Error Status -->
+    <div
+      v-if="hasHITL && isHITLError"
+      class="mb-4 p-4 rounded-lg border-2 border-red-500 bg-gradient-to-r from-red-50 to-red-100 dark:from-red-900/20 dark:to-red-800/20"
+    >
+      <div class="flex items-center gap-2">
+        <span class="text-2xl">❌</span>
+        <div>
+          <h3 class="text-lg font-bold text-red-700 dark:text-red-300">Request Error</h3>
+          <p class="text-sm text-red-600 dark:text-red-400">{{ hitlStatus?.errorMessage || 'An error occurred' }}</p>
         </div>
       </div>
     </div>
@@ -663,7 +716,8 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
-import type { EventSummary, HookEvent, HumanInTheLoopResponse } from '../types';
+import type { EventSummary, HookEvent, HumanInTheLoopResponse, HITLRequest, HITLStatus, HITLType } from '../types';
+import { HITL_TYPE_MAP } from '../types';
 import { useMediaQuery } from '../composables/useMediaQuery';
 import { useVoiceInput } from '../composables/useVoiceInput';
 import { useVoiceNotifications } from '../composables/useVoiceNotifications';
@@ -708,21 +762,101 @@ const approvalComment = ref(''); // For approval type HITL
 const isSubmitting = ref(false);
 const hasSubmittedResponse = ref(false);
 const localResponse = ref<HumanInTheLoopResponse | null>(null); // Optimistic UI
+const deliveryStatus = ref<'delivered' | 'pending_poll' | 'failed' | 'no_websocket' | null>(null);
+const nextAgentAction = ref<{tool_name?: string; hook_event_type: string; summary?: string} | null>(null);
 
 // Options selection for question_input type
 const selectedOption = ref<string>(''); // For single-select (radio)
 const selectedOptions = ref<string[]>([]); // For multi-select (checkboxes)
 const showOtherInput = ref(false); // Show text input when "Other" is selected
 
+// Type guard function to safely convert legacy types to HITLType
+function toHITLType(legacyType: string): HITLType {
+  if (Object.values(HITLType).includes(legacyType as HITLType)) {
+    return legacyType as HITLType;
+  }
+  if (legacyType in HITL_TYPE_MAP) {
+    return HITL_TYPE_MAP[legacyType];
+  }
+  console.warn(`[HITL] Unknown type "${legacyType}", fallback to QUESTION`);
+  return HITLType.QUESTION;
+}
+
+// Unified HITL data with fallback to legacy
+const hitlData = computed(() => {
+  // Prefer new hitl_request, fallback to legacy humanInTheLoop
+  if (props.event.hitl_request) {
+    return props.event.hitl_request;
+  }
+  if (props.event.humanInTheLoop) {
+    // Convert legacy to new format
+    return {
+      type: toHITLType(props.event.humanInTheLoop.type),
+      question: props.event.humanInTheLoop.question,
+      responseWebSocketUrl: props.event.humanInTheLoop.responseWebSocketUrl,
+      choices: props.event.humanInTheLoop.choices,
+      timeout: props.event.humanInTheLoop.timeout,
+      requiresResponse: props.event.humanInTheLoop.requiresResponse,
+      context: props.event.humanInTheLoop.context
+    } as HITLRequest;
+  }
+  return null;
+});
+
+const hitlStatus = computed(() => {
+  // Prefer new hitl_current_status, fallback to legacy
+  if (props.event.hitl_current_status) {
+    return props.event.hitl_current_status;
+  }
+  if (props.event.humanInTheLoopStatus) {
+    return {
+      status: props.event.humanInTheLoopStatus.status,
+      respondedAt: props.event.humanInTheLoopStatus.respondedAt,
+      response: props.event.humanInTheLoopStatus.response ? {
+        eventId: props.event.id,
+        respondedAt: props.event.humanInTheLoopStatus.response.respondedAt,
+        respondedBy: props.event.humanInTheLoopStatus.response.respondedBy,
+        response: props.event.humanInTheLoopStatus.response.response,
+        permission: props.event.humanInTheLoopStatus.response.permission,
+        choice: props.event.humanInTheLoopStatus.response.choice,
+        approved: props.event.humanInTheLoopStatus.response.approved,
+        comment: props.event.humanInTheLoopStatus.response.comment,
+        cancelled: props.event.humanInTheLoopStatus.response.cancelled
+      } : undefined
+    } as HITLStatus;
+  }
+  return null;
+});
+
+const hasHITL = computed(() => {
+  return !!hitlData.value;
+});
+
+const isHITLPending = computed(() => {
+  return hitlStatus.value?.status === 'pending';
+});
+
+const isHITLTimeout = computed(() => {
+  return hitlStatus.value?.status === 'timeout';
+});
+
+const isHITLError = computed(() => {
+  return hitlStatus.value?.status === 'error';
+});
+
+const shouldShowHITL = computed(() => {
+  return hasHITL.value && (isHITLPending.value || hasSubmittedResponse.value);
+});
+
 // Computed: Extract question options from HITL context
 const questionOptions = computed(() => {
-  const ctx = props.event.humanInTheLoop?.context;
+  const ctx = hitlData.value?.context;
   if (!ctx?.questions?.[0]?.options) return [];
   return ctx.questions[0].options;
 });
 
 const isMultiSelect = computed(() => {
-  const ctx = props.event.humanInTheLoop?.context;
+  const ctx = hitlData.value?.context;
   return ctx?.questions?.[0]?.multiSelect === true;
 });
 
@@ -931,7 +1065,7 @@ const copyPayload = async () => {
 
 // New computed properties for HITL
 const hitlTypeEmoji = computed(() => {
-  if (!props.event.humanInTheLoop) return '';
+  if (!hitlData.value) return '';
   const emojiMap: Record<string, string> = {
     question: '❓',
     permission: '🔐',
@@ -939,11 +1073,11 @@ const hitlTypeEmoji = computed(() => {
     approval: '✅',
     question_input: '💬'
   };
-  return emojiMap[props.event.humanInTheLoop.type] || '❓';
+  return emojiMap[hitlData.value.type] || '❓';
 });
 
 const hitlTypeLabel = computed(() => {
-  if (!props.event.humanInTheLoop) return '';
+  if (!hitlData.value) return '';
   const labelMap: Record<string, string> = {
     question: 'Agent Question',
     permission: 'Permission Request',
@@ -951,12 +1085,12 @@ const hitlTypeLabel = computed(() => {
     approval: 'Approval Required',
     question_input: 'Input Required'
   };
-  return labelMap[props.event.humanInTheLoop.type] || 'Question';
+  return labelMap[hitlData.value.type] || 'Question';
 });
 
 const permissionType = computed(() => {
   // Try to get permission_type from HITL context or full event
-  return props.event.humanInTheLoop?.context?.permission_type
+  return hitlData.value?.context?.permission_type
     || fullEvent.value?.payload?.permission_type
     || null;
 });
@@ -987,6 +1121,15 @@ const submitResponse = async () => {
     });
 
     if (!res.ok) throw new Error('Failed to submit response');
+    const responseData = await res.json();
+    // Validate deliveryStatus from server response
+    const validStatuses = ['delivered', 'pending_poll', 'failed', 'no_websocket'] as const;
+    if (responseData.deliveryStatus && validStatuses.includes(responseData.deliveryStatus)) {
+      deliveryStatus.value = responseData.deliveryStatus;
+    } else {
+      deliveryStatus.value = 'pending_poll'; // Default to pending_poll if unknown (agent can poll)
+      console.warn('[HITL] Invalid deliveryStatus received, defaulting to pending_poll:', responseData.deliveryStatus);
+    }
 
     emit('response-submitted', response);
   } catch (error) {
@@ -1151,7 +1294,7 @@ const hasAudio = computed(() => {
   if (!voiceNotifications.isConfigured.value) return false;
 
   // HITL events with question
-  if (props.event.humanInTheLoop?.question) return true;
+  if (hitlData.value?.question) return true;
 
   // Events with summary
   if (props.event.summary) return true;
@@ -1170,8 +1313,8 @@ const hasAudio = computed(() => {
 // Get text to speak for this event
 const getEventAudioText = (): string | null => {
   // HITL question with choices
-  if (props.event.humanInTheLoop) {
-    const hitl = props.event.humanInTheLoop;
+  if (hitlData.value) {
+    const hitl = hitlData.value;
     let text = hitl.question || '';
 
     if (hitl.type === 'choice' && hitl.choices?.length) {

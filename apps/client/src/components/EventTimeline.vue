@@ -28,6 +28,19 @@
       <!-- Controls Row: Collapse Tags Toggle + Search -->
       <div class="mt-3 mobile:mt-2 w-full">
         <div class="flex items-center gap-2 mobile:gap-1">
+          <!-- Compact Mode Toggle -->
+          <button
+            @click="compactMode = !compactMode"
+            :class="[
+              'px-2 py-1.5 rounded-lg text-xs font-bold border transition-all duration-200 whitespace-nowrap',
+              compactMode
+                ? 'bg-green-600 text-white border-green-600'
+                : 'bg-[var(--theme-bg-tertiary)] text-[var(--theme-text-secondary)] border-[var(--theme-border-primary)] hover:border-green-500'
+            ]"
+            title="Toggle compact layout"
+          >
+            {{ compactMode ? '📐 Standard' : '📐 Compact' }}
+          </button>
           <!-- Collapse Tags Toggle -->
           <button
             @click="collapseTags = !collapseTags"
@@ -40,6 +53,25 @@
             title="Toggle tag visibility in event rows"
           >
             {{ collapseTags ? '🏷️ Show Tags' : '🏷️ Hide Tags' }}
+          </button>
+          <!-- HITL Only Mode Toggle with Pending Count -->
+          <button
+            @click="hitlOnlyMode = !hitlOnlyMode"
+            :class="[
+              'relative px-2 py-1.5 rounded-lg text-xs font-bold border transition-all duration-200 whitespace-nowrap flex items-center gap-1',
+              hitlOnlyMode
+                ? 'bg-amber-500 text-white border-amber-600 hover:bg-amber-600'
+                : 'bg-[var(--theme-bg-tertiary)] text-[var(--theme-text-secondary)] border-[var(--theme-border-primary)] hover:border-amber-500'
+            ]"
+            title="Show only events requiring human interaction"
+          >
+            <span>{{ hitlOnlyMode ? 'All Events' : 'HITL Only' }}</span>
+            <span
+              v-if="pendingHitlCount > 0"
+              class="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 bg-red-500 text-white text-[10px] font-bold rounded-full"
+            >
+              {{ pendingHitlCount > 99 ? '99+' : pendingHitlCount }}
+            </span>
           </button>
           <div class="relative flex-1">
             <input
@@ -85,9 +117,10 @@
       <TransitionGroup
         name="event"
         tag="div"
-        class="space-y-2 mobile:space-y-1.5"
+        :class="compactMode ? 'space-y-1' : 'space-y-2 mobile:space-y-1.5'"
       >
-        <EventRow
+        <component
+          :is="compactMode ? EventRowCompact : EventRow"
           v-for="event in filteredEvents"
           :key="`${event.id}-${event.timestamp}`"
           :event="event"
@@ -114,6 +147,7 @@
 import { ref, computed, watch, nextTick } from 'vue';
 import type { EventSummary, EventTimeRange } from '../types';
 import EventRow from './EventRow.vue';
+import EventRowCompact from './EventRowCompact.vue';
 import { useEventColors } from '../composables/useEventColors';
 import { useEventSearch } from '../composables/useEventSearch';
 
@@ -138,7 +172,9 @@ const emit = defineEmits<{
 const scrollContainer = ref<HTMLElement>();
 const { getGradientForSession, getColorForSession, getGradientForApp, getColorForApp, getHexColorForApp } = useEventColors();
 const { searchPattern, searchError, searchEvents, updateSearchPattern, clearSearch } = useEventSearch();
-const collapseTags = ref(false);
+const collapseTags = ref(true);
+const compactMode = ref(true);
+const hitlOnlyMode = ref(true);
 
 // Add filter condition from clickable tags
 const addFilterCondition = ({ field, value }: { field: string; value: string }) => {
@@ -192,6 +228,11 @@ const getTimeRangeThreshold = (timeRange: EventTimeRange): number | null => {
   }
 };
 
+// Pending HITL count for badge
+const pendingHitlCount = computed(() => {
+  return props.events.filter(event => event.has_hitl && event.hitl_status === 'pending').length;
+});
+
 const filteredEvents = computed(() => {
   const timeThreshold = getTimeRangeThreshold(props.filters.timeRange);
 
@@ -219,6 +260,11 @@ const filteredEvents = computed(() => {
   // Apply regex search filter
   if (searchPattern.value) {
     filtered = searchEvents(filtered, searchPattern.value);
+  }
+
+  // Apply HITL Only filter
+  if (hitlOnlyMode.value) {
+    filtered = filtered.filter(event => event.has_hitl && event.hitl_status === 'pending');
   }
 
   return filtered;

@@ -1,3 +1,5 @@
+import type { HITLRequest, HITLStatus, HITLType } from './hitl';
+
 // New interface for human-in-the-loop requests
 export interface HumanInTheLoop {
   question: string;
@@ -64,14 +66,23 @@ export interface EventSummary {
   // HITL flags (lightweight):
   has_hitl: boolean;
   hitl_type?: string;
-  hitl_status?: 'pending' | 'responded';
-  // Optional full HITL data for real-time events (needed for HITL UI)
+  hitl_status?: 'pending' | 'responded' | 'timeout' | 'error';
+  // NEW: Standardized HITL data
+  hitl_request?: HITLRequest;
+  hitl_current_status?: HITLStatus;
+  // Legacy: Optional full HITL data for real-time events (deprecated, use hitl_request)
   humanInTheLoop?: HumanInTheLoop;
   humanInTheLoopStatus?: HumanInTheLoopStatus;
 }
 
 // Convert full HookEvent to lightweight EventSummary
 export function toEventSummary(event: HookEvent): EventSummary {
+  // Determine HITL status including timeout/error
+  let hitlStatus: 'pending' | 'responded' | 'timeout' | 'error' | undefined;
+  if (event.humanInTheLoop) {
+    hitlStatus = event.humanInTheLoopStatus?.status || 'pending';
+  }
+
   return {
     id: event.id!,
     source_app: event.source_app,
@@ -86,11 +97,28 @@ export function toEventSummary(event: HookEvent): EventSummary {
     tool_command: event.payload?.tool_input?.command,
     tool_file_path: event.payload?.tool_input?.file_path,
     tool_description: event.payload?.tool_input?.description,
-    // HITL
+    // HITL flags
     has_hitl: !!event.humanInTheLoop,
     hitl_type: event.humanInTheLoop?.type,
-    hitl_status: event.humanInTheLoop ? (event.humanInTheLoopStatus?.status || 'pending') : undefined,
-    // Keep full HITL for real-time events
+    hitl_status: hitlStatus,
+    // New HITL data will be populated by HITLService
+    hitl_request: undefined,
+    hitl_current_status: event.humanInTheLoopStatus ? {
+      status: event.humanInTheLoopStatus.status,
+      respondedAt: event.humanInTheLoopStatus.respondedAt,
+      response: event.humanInTheLoopStatus.response ? {
+        eventId: event.id!,
+        respondedAt: event.humanInTheLoopStatus.response.respondedAt,
+        respondedBy: event.humanInTheLoopStatus.response.respondedBy,
+        response: event.humanInTheLoopStatus.response.response,
+        permission: event.humanInTheLoopStatus.response.permission,
+        choice: event.humanInTheLoopStatus.response.choice,
+        approved: event.humanInTheLoopStatus.response.approved,
+        comment: event.humanInTheLoopStatus.response.comment,
+        cancelled: event.humanInTheLoopStatus.response.cancelled
+      } : undefined
+    } : undefined,
+    // Legacy (keep for backward compatibility)
     humanInTheLoop: event.humanInTheLoop,
     humanInTheLoopStatus: event.humanInTheLoopStatus
   };

@@ -6,9 +6,11 @@ WORKDIR /app
 FROM base AS runner
 ENV NODE_ENV=production
 
-# Create app user
+# Create app user and install wget for healthcheck
 RUN groupadd --system --gid 1001 nodejs && \
-    useradd --system --uid 1001 --gid nodejs bunjs
+    useradd --system --uid 1001 --gid nodejs bunjs && \
+    apt-get update && apt-get install -y wget && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copy package.json only (skip lockfile due to version mismatch)
 COPY package.json ./

@@ -17,8 +17,8 @@ RUN bun run vite build
 # Production image with Nginx
 FROM nginx:alpine AS runner
 
-# Install envsubst (gettext)
-RUN apk add --no-cache gettext
+# Install envsubst (gettext) and wget for healthcheck
+RUN apk add --no-cache gettext wget
 
 # Copy nginx config template
 COPY nginx.conf.template /etc/nginx/conf.d/default.conf.template

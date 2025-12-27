@@ -20,6 +20,11 @@ const routes = [
     name: 'project-detail',
     component: () => import('../views/ProjectDetailView.vue'),
     props: true
+  },
+  {
+    path: '/preview-variants',
+    name: 'preview-variants',
+    component: () => import('../views/PreviewVariants.vue')
   }
 ]
 

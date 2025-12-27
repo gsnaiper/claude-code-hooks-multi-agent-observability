@@ -58,9 +58,17 @@ export function useEventSearch() {
       parts.push(event.summary);
     }
 
-    // HITL type
+    // HITL type and status
     if (event.hitl_type) {
       parts.push(event.hitl_type);
+    }
+    if (event.hitl_status) {
+      parts.push(event.hitl_status);
+    }
+
+    // Project ID
+    if (event.project_id) {
+      parts.push(event.project_id);
     }
 
     return parts.join(' ').toLowerCase();
@@ -78,6 +86,9 @@ export function useEventSearch() {
       tool_file_path: () => event.tool_file_path ?? undefined,
       summary: () => event.summary ?? undefined,
       hitl_type: () => event.hitl_type ?? undefined,
+      hitl_status: () => event.hitl_status ?? undefined,
+      has_hitl: () => event.has_hitl ? 'true' : 'false',
+      project_id: () => event.project_id ?? undefined,
     };
     return fieldMap[field]?.();
   };

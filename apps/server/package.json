@@ -13,7 +13,11 @@
     "migrate:no-embeddings": "bun run scripts/migrate-to-postgres.ts --skip-embeddings",
     "merge": "bun run scripts/full-merge-migration.ts",
     "merge:dry-run": "bun run scripts/full-merge-migration.ts --dry-run",
-    "merge:no-embeddings": "bun run scripts/full-merge-migration.ts --skip-embeddings"
+    "merge:no-embeddings": "bun run scripts/full-merge-migration.ts --skip-embeddings",
+    "test": "bun test",
+    "test:hitl": "bun test src/hitl/__tests__/",
+    "test:watch": "bun test --watch",
+    "test:coverage": "bun test --coverage"
   },
   "devDependencies": {
     "@types/bun": "latest",

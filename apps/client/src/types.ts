@@ -1,4 +1,75 @@
-// New interface for human-in-the-loop requests
+// HITL Type enum (matches server)
+export enum HITLType {
+  QUESTION = 'question',
+  PERMISSION = 'permission',
+  CHOICE = 'choice',
+  APPROVAL = 'approval',
+  QUESTION_INPUT = 'question_input'
+}
+
+// HITL Type mapping for legacy types
+export const HITL_TYPE_MAP: Record<string, HITLType> = {
+  'permission_prompt': HITLType.PERMISSION,
+  'idle_prompt': HITLType.QUESTION,
+  'question': HITLType.QUESTION,
+  'permission': HITLType.PERMISSION,
+  'choice': HITLType.CHOICE,
+  'approval': HITLType.APPROVAL,
+  'question_input': HITLType.QUESTION_INPUT
+};
+
+// Standardized HITL Request
+export interface HITLRequest {
+  type: HITLType;
+  question: string;
+  responseWebSocketUrl: string;
+  choices?: string[];
+  timeout?: number;
+  requiresResponse?: boolean;
+  context?: {
+    permission_type?: string;
+    tool_name?: string;
+    command?: string;
+    file_path?: string;
+    old_string?: string;
+    new_string?: string;
+    content?: string;
+    questions?: Array<{
+      question?: string;
+      options?: Array<{ label: string; description?: string }>;
+      multiSelect?: boolean;
+    }>;
+    [key: string]: unknown;
+  };
+}
+
+// Standardized HITL Response
+export interface HITLResponse {
+  eventId: number;
+  idempotencyKey: string;  // UUID for deduplication
+  respondedAt: number;
+  respondedBy?: string;
+  response?: string;
+  permission?: boolean;
+  choice?: string;
+  approved?: boolean;
+  comment?: string;
+  cancelled?: boolean;
+}
+
+// Delivery status for HITL responses
+export type HITLDeliveryStatus = 'delivered' | 'pending_poll' | 'failed' | 'no_websocket';
+
+// HITL Status
+export interface HITLStatus {
+  status: 'pending' | 'responded' | 'timeout' | 'error';
+  respondedAt?: number;
+  response?: HITLResponse;
+  errorMessage?: string;
+  timeoutAt?: number;
+}
+
+// Legacy interfaces (kept for backwards compatibility)
 export interface HumanInTheLoop {
   question: string;
   responseWebSocketUrl: string;
@@ -74,10 +145,13 @@ export interface EventSummary {
   // HITL flags:
   has_hitl: boolean;
   hitl_type?: string;
-  hitl_status?: 'pending' | 'responded';
+  hitl_status?: 'pending' | 'responded' | 'timeout' | 'error';
   // Optional full HITL data for real-time events
   humanInTheLoop?: HumanInTheLoop;
   humanInTheLoopStatus?: HumanInTheLoopStatus;
+  // NEW: Standardized HITL data
+  hitl_request?: HITLRequest;
+  hitl_current_status?: HITLStatus;
 }
 
 // Time range filter for events

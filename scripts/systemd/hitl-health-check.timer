@@ -1,0 +1,19 @@
+[Unit]
+Description=HITL Health Check Timer
+Documentation=https://github.com/your-org/claude-code-hooks-multi-agent-observability
+
+[Timer]
+# Run 5 minutes after boot
+OnBootSec=5min
+
+# Run every 5 minutes
+OnUnitActiveSec=5min
+
+# Make sure timer survives reboots
+Persistent=true
+
+# Randomize start time by up to 30 seconds to avoid thundering herd
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target

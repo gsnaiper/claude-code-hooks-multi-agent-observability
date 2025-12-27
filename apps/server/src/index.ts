@@ -69,6 +69,8 @@ import {
   getThemeStats
 } from './theme';
 import { EmbeddingQueue, extractSearchableContent } from './vector';
+import { hitlService, HITLType } from './hitl';
+import type { HITLRequest, HITLResponse } from './hitl';
 
 // ============================================
 // Input Validation Helpers
@@ -134,138 +136,6 @@ try {
 
 // Store WebSocket clients
 const wsClients = new Set<any>();
-
-// Validate WebSocket URL to prevent SSRF attacks
-function validateWebSocketUrl(wsUrl: string): boolean {
-  try {
-    const url = new URL(wsUrl);
-    // Only allow ws/wss protocols
-    if (!['ws:', 'wss:'].includes(url.protocol)) {
-      console.warn(`[HITL] Invalid WebSocket protocol: ${url.protocol}`);
-      return false;
-    }
-    // Only allow localhost connections to prevent SSRF
-    const allowedHosts = ['localhost', '127.0.0.1', '[::1]', '::1'];
-    if (!allowedHosts.includes(url.hostname)) {
-      console.warn(`[HITL] WebSocket URL rejected - only localhost allowed: ${url.hostname}`);
-      return false;
-    }
-    // Validate port is reasonable (1024-65535)
-    const port = url.port ? parseInt(url.port) : (url.protocol === 'wss:' ? 443 : 80);
-    if (port < 1024 || port > 65535) {
-      console.warn(`[HITL] WebSocket port out of range: ${port}`);
-      return false;
-    }
-    return true;
-  } catch (e) {
-    console.warn(`[HITL] Invalid WebSocket URL format: ${wsUrl}`);
-    return false;
-  }
-}
-
-// Helper function to send response to agent via WebSocket
-async function sendResponseToAgent(
-  wsUrl: string,
-  response: HumanInTheLoopResponse
-): Promise<void> {
-  // Validate URL before connecting (SSRF prevention)
-  if (!validateWebSocketUrl(wsUrl)) {
-    throw new Error(`Invalid WebSocket URL: ${wsUrl}`);
-  }
-
-  console.log(`[HITL] Connecting to agent WebSocket: ${wsUrl}`);
-
-  return new Promise((resolve, reject) => {
-    let ws: WebSocket | null = null;
-    let isResolved = false;
-    let connectionTimeout: ReturnType<typeof setTimeout> | null = null;
-
-    const cleanup = () => {
-      if (connectionTimeout) {
-        clearTimeout(connectionTimeout);
-        connectionTimeout = null;
-      }
-      if (ws) {
-        try {
-          ws.close();
-        } catch (e) {
-          // Ignore close errors
-        }
-      }
-    };
-
-    // Connection timeout (5 seconds)
-    connectionTimeout = setTimeout(() => {
-      if (!isResolved) {
-        console.warn('[HITL] WebSocket connection timeout');
-        cleanup();
-        isResolved = true;
-        reject(new Error('WebSocket connection timeout'));
-      }
-    }, 5000);
-
-    try {
-      ws = new WebSocket(wsUrl);
-
-      ws.onopen = () => {
-        if (isResolved) return;
-        console.log('[HITL] WebSocket connection opened, sending response...');
-
-        try {
-          ws!.send(JSON.stringify(response));
-          console.log('[HITL] Response sent successfully');
-
-          // Wait longer to ensure message fully transmits before closing
-          setTimeout(() => {
-            cleanup();
-            if (!isResolved) {
-              isResolved = true;
-              resolve();
-            }
-          }, 500);
-        } catch (error) {
-          console.error('[HITL] Error sending message:', error);
-          cleanup();
-          if (!isResolved) {
-            isResolved = true;
-            reject(error);
-          }
-        }
-      };
-
-      ws.onerror = (error) => {
-        console.error('[HITL] WebSocket error:', error);
-        cleanup();
-        if (!isResolved) {
-          isResolved = true;
-          reject(error);
-        }
-      };
-
-      ws.onclose = () => {
-        console.log('[HITL] WebSocket connection closed');
-      };
-
-      // Timeout after 5 seconds
-      setTimeout(() => {
-        if (!isResolved) {
-          console.error('[HITL] Timeout sending response to agent');
-          cleanup();
-          isResolved = true;
-          reject(new Error('Timeout sending response to agent'));
-        }
-      }, 5000);
-
-    } catch (error) {
-      console.error('[HITL] Error creating WebSocket:', error);
-      cleanup();
-      if (!isResolved) {
-        isResolved = true;
-        reject(error);
-      }
-    }
-  });
-}
 
 // Create Bun server with HTTP and WebSocket support
 const server = Bun.serve({
@@ -384,8 +254,17 @@ const server = Bun.serve({
           );
         }
 
+        // Process HITL if present
+        let eventSummary = toEventSummary(savedEvent);
+        if (savedEvent.humanInTheLoop || hitlService.isHITLEvent(savedEvent)) {
+          const hitlRequest = await hitlService.processEvent(savedEvent);
+          if (hitlRequest) {
+            // Populate hitl_request in the event summary
+            eventSummary.hitl_request = hitlRequest;
+          }
+        }
+
         // Broadcast to all WebSocket clients (use summary for performance)
-        const eventSummary = toEventSummary(savedEvent);
         const message = JSON.stringify({ type: 'event', data: eventSummary });
         wsClients.forEach(client => {
           try {
@@ -482,6 +361,9 @@ const server = Bun.serve({
         const response: HumanInTheLoopResponse = await req.json();
         response.respondedAt = Date.now();
 
+        // Generate idempotency key for deduplication
+        const idempotencyKey = crypto.randomUUID();
+
         // Update event in database
         const updatedEvent = await updateEventHITLResponse(id, response);
 
@@ -492,16 +374,32 @@ const server = Bun.serve({
           });
         }
 
+        // Create HITLResponse with idempotencyKey
+        const hitlResponse: HITLResponse = {
+          eventId: id,
+          idempotencyKey,
+          respondedAt: Date.now(),
+          respondedBy: response.respondedBy,
+          response: response.response,
+          permission: response.permission,
+          choice: response.choice,
+          approved: response.approved,
+          comment: response.comment,
+          cancelled: response.cancelled
+        };
+
+        // Use hitlService to handle response
+        await hitlService.handleResponse(id, hitlResponse);
+
         // Send response to agent via WebSocket
+        let sent = false;
         if (updatedEvent.humanInTheLoop?.responseWebSocketUrl) {
-          try {
-            await sendResponseToAgent(
-              updatedEvent.humanInTheLoop.responseWebSocketUrl,
-              response
-            );
-          } catch (error) {
-            console.error('Failed to send response to agent:', error);
-            // Don't fail the request if we can't reach the agent
+          sent = await hitlService.sendResponseToAgent(
+            updatedEvent.humanInTheLoop.responseWebSocketUrl,
+            hitlResponse
+          );
+          if (!sent) {
+            console.warn(`[HITL] Failed to send response to agent for event ${id}`);
           }
         }
 
@@ -516,7 +414,27 @@ const server = Bun.serve({
           }
         });
 
-        return new Response(JSON.stringify(updatedEvent), {
+        // Determine delivery status
+        let deliveryStatus: 'delivered' | 'failed' | 'pending_poll' | 'no_websocket' = 'no_websocket';
+        if (updatedEvent.humanInTheLoop?.responseWebSocketUrl) {
+          // If WS failed, agent can still poll - mark as pending_poll instead of failed
+          deliveryStatus = sent ? 'delivered' : 'pending_poll';
+        }
+
+        // Record delivery metrics
+        hitlService.recordDeliveryStatus(deliveryStatus === 'no_websocket' ? 'pending_poll' : deliveryStatus);
+
+        return new Response(JSON.stringify({
+          success: true,
+          event: updatedEvent,
+          idempotencyKey,
+          deliveryStatus,
+          message: deliveryStatus === 'delivered'
+            ? 'Response delivered to agent'
+            : deliveryStatus === 'pending_poll'
+            ? 'Agent will receive response via polling'
+            : 'No WebSocket URL provided by agent'
+        }), {
           headers: { ...headers, 'Content-Type': 'application/json' }
         });
       } catch (error) {
@@ -552,9 +470,17 @@ const server = Bun.serve({
 
         // Check if there's a HITL response
         if (event.humanInTheLoopStatus?.status === 'responded' && event.humanInTheLoopStatus?.response) {
+          // Ensure idempotencyKey is present for deduplication
+          const responseData = {
+            ...event.humanInTheLoopStatus.response,
+            // Generate if missing (for backwards compatibility)
+            idempotencyKey: event.humanInTheLoopStatus.response.idempotencyKey ||
+              (event.humanInTheLoopStatus.response as any).idempotencyKey ||
+              `poll-${id}-${event.humanInTheLoopStatus.respondedAt}`
+          };
           return new Response(JSON.stringify({
             success: true,
-            data: event.humanInTheLoopStatus.response
+            data: responseData
           }), {
             headers: { ...headers, 'Content-Type': 'application/json' }
           });
